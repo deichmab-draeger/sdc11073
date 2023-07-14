@@ -239,6 +239,9 @@ def runtest_metric_reports(unit_test, sdc_device, sdc_client, logger, test_perio
 class Test_Client_SomeDevice(unittest.TestCase):
     def setUp(self):
         basic_logging_setup()
+        logging.getLogger('sdc.device.soap_client_pool').setLevel(logging.DEBUG)
+        logging.getLogger('sdc.device.subscrMgr').setLevel(logging.DEBUG)
+
         self.logger = get_logger_adapter('sdc.test')
         sys.stderr.write('\n############### start setUp {} ##############\n'.format(self._testMethodName))
         self.logger.info('############### start setUp {} ##############'.format(self._testMethodName))
@@ -406,6 +409,7 @@ class Test_Client_SomeDevice(unittest.TestCase):
             self.assertEqual(len(mgr._subscriptions.objects), 0)
 
     def test_client_stop_no_unsubscribe(self):
+        logging.getLogger('sdc.device.soap_client_pool').setLevel(logging.DEBUG)
         self.log_watcher.setPaused(True)  # this test will have error logs, no check
         cl_mdib = ConsumerMdib(self.sdc_client)
         cl_mdib.init_mdib()
@@ -417,6 +421,7 @@ class Test_Client_SomeDevice(unittest.TestCase):
         for hosted_service in services:
             all_subscriptions.extend(hosted_service.subscriptions_manager._subscriptions.objects)
 
+        time.sleep(5)
         # first check that we see subscriptions on devices side
         for hosted_service in services:
             mgr = hosted_service.subscriptions_manager

@@ -102,7 +102,11 @@ class SubscriptionBase:
                 self._end_to_url = urlparse(self.end_to_address)
             else:
                 self._end_to_url = None
-
+        # first is empty because path starts with / :
+        try:
+            self.assumed_epr = urlparse(self.notify_to_address).path.split('/')[1]
+        except IndexError:
+            self.assumed_epr = ''
         self.identifier_uuid = uuid.uuid4()
         self.reference_parameters = []  # default: no reference parameters
         self.path_suffix = None  # used for path based dispatching
@@ -120,7 +124,7 @@ class SubscriptionBase:
         self.last_roundtrip_times = deque(
             maxlen=MAX_ROUNDTRIP_VALUES)  # a list of last n roundtrip times for notifications
         self.max_roundtrip_time = 0
-        self._soap_client_pool.register_netloc_user(self.notify_to_url.netloc, self.on_unreachable)
+        self._soap_client_pool.register_netloc_user(self.notify_to_url.netloc, self.assumed_epr, self.on_unreachable)
 
     def set_reference_parameter(self):
         """Create a ReferenceParameters instance with a reference parameter."""
@@ -148,13 +152,13 @@ class SubscriptionBase:
     def _get_soap_client(self):
         if self._soap_client is None:
             self._soap_client = self._soap_client_pool.get_soap_client(self.notify_to_url.netloc,
-                                                                       self._accepted_encodings,
-                                                                       self.on_unreachable)
+                                                                       self._accepted_encodings)
         return self._soap_client
 
     def _release_soap_client(self):
         if self._soap_client is not None:
-            self._soap_client_pool.forget_callable(self.notify_to_url.netloc, self.on_unreachable)
+            self._soap_client_pool.forget_callback(self.on_unreachable)
+            self._soap_client = None
 
     @property
     def remaining_seconds(self):
@@ -473,19 +477,22 @@ class SubscriptionsManagerBase:
             subscription.send_notification_report(body_node, action)
         except ConnectionRefusedError as ex:
             self._logger.error('could not send notification report: {!r}:  subscr = {}', ex, subscription)
-            self._soap_client_pool.report_unreachable(subscription.notify_to_url.netloc)
+            self._soap_client_pool.report_unreachable_netloc(subscription.notify_to_url.netloc)
         except HTTPReturnCodeError as ex:
             # this is an error related to the connection => log error and continue
             self._logger.error('could not send notification report: HTTP status= {}, reason={}, {}', ex.status,
                                ex.reason, subscription)
+            if ex.status == 404:
+                self._soap_client_pool.report_unreachable_epr(subscription.notify_to_url.netloc,
+                                                              subscription.assumed_epr)
         except http.client.NotConnected as ex:
             # this is an error related to the connection => log error and continue
             self._logger.error('could not send notification report: {!r}:  subscr = {}', ex, subscription)
-            self._soap_client_pool.report_unreachable(subscription.notify_to_url.netloc)
+            self._soap_client_pool.report_unreachable_netloc(subscription.notify_to_url.netloc)
         except socket.timeout as ex:
             # this is an error related to the connection => log error and continue
             self._logger.error('could not send notification report error= {!r}: {}', ex, subscription)
-            self._soap_client_pool.report_unreachable(subscription.notify_to_url.netloc)
+            self._soap_client_pool.report_unreachable_netloc(subscription.notify_to_url.netloc)
         except etree_.DocumentInvalid as ex:
             # this is an error related to the document, it cannot be sent to any subscriber => re-raise
             self._logger.error('Invalid Document: {!r}\n{}', ex, etree_.tostring(body_node))

@@ -213,27 +213,29 @@ class BICEPSSubscriptionsManagerBaseAsync(SubscriptionsManagerBase):
         except aiohttp.client_exceptions.ClientConnectorError as ex:
             # this is an error related to the connection => log error and continue
             self._logger.error('could not send notification report {}: {} {}', action, str(ex), subscription)
-            self._soap_client_pool.report_unreachable(subscription.notify_to_url.netloc)
+            self._soap_client_pool.report_unreachable_netloc(subscription.notify_to_url.netloc)
         except HTTPReturnCodeError as ex:
             # this is an error related to the connection => log error and continue
             self._logger.error('could not send notification report {}: HTTP status= {}, reason={}, {}',
                                action, ex.status, ex.reason, subscription)
+            self._soap_client_pool.report_unreachable_epr(subscription.notify_to_url.netloc,
+                                                          subscription.notify_to_url.assumed_epr)
         except http.client.NotConnected as ex:
             # this is an error related to the connection => log error and continue
             self._logger.error('{subscription}:could not send notification report {}: {!r}:  subscr = {}',
                                action, ex, subscription)
-            self._soap_client_pool.report_unreachable(subscription.notify_to_url.netloc)
+            self._soap_client_pool.report_unreachable_netloc(subscription.notify_to_url.netloc)
         except socket.timeout as ex:
             # this is an error related to the connection => log error and continue
             self._logger.error('could not send notification report {} error= {!r}: {}', action, ex, subscription)
-            self._soap_client_pool.report_unreachable(subscription.notify_to_url.netloc)
+            self._soap_client_pool.report_unreachable_netloc(subscription.notify_to_url.netloc)
         except asyncio.exceptions.TimeoutError as ex:
             # this is an error related to the connection => log error and continue
             self._logger.error('could not send notification report {} error= {!r}: {}', action, ex, subscription)
         except aiohttp.client_exceptions.ClientConnectionError as ex:
             # this is an error related to the connection => log error and continue
             self._logger.error('could not send notification report {} error= {!r}: {}', action, ex, subscription)
-            self._soap_client_pool.report_unreachable(subscription.notify_to_url.netloc)
+            self._soap_client_pool.report_unreachable_netloc(subscription.notify_to_url.netloc)
         except etree_.DocumentInvalid as ex:
             # this is an error related to the document, it cannot be sent to any subscriber => re-raise
             self._logger.error('Invalid Document for action {}: {!r}\n{}', action, ex, etree_.tostring(body_node))
