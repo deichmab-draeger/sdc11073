@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import traceback
 from http.server import BaseHTTPRequestHandler
 from urllib.parse import urlparse
 
@@ -76,7 +77,8 @@ class DispatchingRequestHandler(BaseHTTPRequestHandler):
             result = component.do_post(self.headers, self.path, peer_name, request_bytes)
             http_status, http_reason, response_xml_string = result
         except Exception as ex:
-            self.server.logger.error('exception (request from {}): {}', self.path, self.client_address, ex)
+            self.server.logger.error('exception (request from {}): {}',
+                                     self.path, self.client_address, traceback.format_exception())
             http_reason = str(ex)
             response_xml_string = b''
             self.send_response(500, http_reason)  # server error
