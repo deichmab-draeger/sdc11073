@@ -1,4 +1,5 @@
 import datetime
+import time
 import unittest
 from decimal import Decimal
 from math import isclose
@@ -53,6 +54,54 @@ class TestStateContainers(unittest.TestCase):
         state3.update_from_node(node)
         self.assertIsNotNone(state3.node)
 
+    def test_get_xml_value(self):
+        # test get_xml_value and get_actual_value methods
+        state = sc.NumericMetricStateContainer(descriptor_container=self.descr)
+        state2 = sc.NumericMetricStateContainer(descriptor_container=self.descr)
+        state2.update_from_node(state.mk_state_node(_my_tag, self.ns_mapper))
+        self.assertEqual(state.StateVersion, 0)
+        self.assertEqual(state2.StateVersion, 0)
+
+        # StateVersion 0 is the implied value, the attribute is not present in node.
+        # Verify that the xml value in state2 is None
+        self.assertIsNone(state.get_xml_value('StateVersion'))
+        self.assertIsNone(state2.get_xml_value('StateVersion'))
+
+        # verify that actual version is also None in both states
+        self.assertIsNone(state.get_actual_value('StateVersion'))
+        self.assertIsNone(state2.get_actual_value('StateVersion'))
+
+        # State version 1  => verify that the xml value is present in state2
+        state.increment_state_version()
+        state2.update_from_node(state.mk_state_node(_my_tag, self.ns_mapper))
+        self.assertEqual(state2.get_xml_value('StateVersion'), '1')
+        self.assertEqual(state2.get_actual_value('StateVersion'), 1)
+        # setting StateVersion in state2 invalidates xml value => None
+        state2.StateVersion = 3
+        self.assertEqual(state2.get_xml_value('StateVersion'), '3')
+        # self.assertIsNone(state2.get_xml_value('StateVersion'))
+        self.assertEqual(state2.get_actual_value('StateVersion'), 3)
+
+        # test with a more complex type
+        state.mk_metric_value()
+        state.MetricValue.Value = Decimal(42)
+        determination_time = time.time()
+        state.MetricValue.DeterminationTime = determination_time
+        state.ActiveAveragingPeriod = Decimal(98.76)
+        state2.update_from_node(state.mk_state_node(_my_tag, self.ns_mapper))
+        self.assertEqual(state2.MetricValue.get_xml_value('Value'), '42')
+        det_string = state2.MetricValue.get_xml_value('DeterminationTime')
+        self.assertEqual(det_string, str(int(determination_time * 1000)))
+        self.assertEqual(state2.MetricValue.get_actual_value('Value'), Decimal('42'))
+
+        av_string = state2.get_xml_value('ActiveAveragingPeriod')
+        self.assertEqual(av_string, 'PT0H1M38.76S')
+        self.assertEqual(state2.get_actual_value('ActiveAveragingPeriod'), Decimal(98.76))
+
+        # Verify that get_xml_value on a complex value raises a TypeError
+        self.assertRaises(TypeError, state2.get_xml_value, 'MetricValue')
+        # in contrast, get_actual_value returns the instance
+        self.assertIsInstance(state2.get_actual_value('MetricValue'), pm_types.NumericMetricValue)
 
     def _verifyAbstractStateContainerDataEqual(self, state1, state2):
         self.assertEqual(state1.DescriptorVersion, state2.DescriptorVersion)
