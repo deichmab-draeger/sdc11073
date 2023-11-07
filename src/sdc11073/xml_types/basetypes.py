@@ -21,7 +21,8 @@ class StringEnum(str, enum.Enum):
 
 
 class XMLTypeBase:
-    """ Base class that it used to declare XML data types. It supports nesting of data and inheritance.
+    """Base class that it used to declare XML data types. It supports nesting of data and inheritance.
+
     It uses xml_structure elements to declare the members.
     Because order matters in XML, the _props member is needed that lists all members that
     represent XML data in the correct order.
@@ -30,6 +31,8 @@ class XMLTypeBase:
     - initializing from XML: class method 'from_node'
     -
     """
+
+    NODETYPE = None
 
     def __init__(self):
         for _, prop in self.sorted_container_properties():
@@ -71,6 +74,12 @@ class XMLTypeBase:
                     ret.append((name, obj))
         return ret
 
+    def get_xml_value(self, attr_name: str):
+        return getattr(self.__class__, attr_name).get_xml_value(self)
+
+    def get_actual_value(self, attr_name: str):
+        return getattr(self.__class__, attr_name).get_actual_value(self)
+
     def __eq__(self, other):
         """ compares all properties"""
         try:
@@ -94,7 +103,7 @@ class XMLTypeBase:
 
     @classmethod
     def from_node(cls, node):
-        """ default from_node Constructor that provides no arguments for class __init__"""
+        """Default from_node Constructor that provides no arguments for class __init__."""
         obj = cls()
         obj.update_from_node(node)
         return obj
@@ -109,7 +118,7 @@ class ElementWithText(XMLTypeBase):
     - access to text via "text" member, it is not the property value itself.
     - It can be extended with Attributes
     """
-    NODETYPE = None
+
     text: str = NodeStringProperty()  # this is the text of the node. Here attribute is lower case!
     _props = ('text',)
 
@@ -128,10 +137,12 @@ class ElementWithTextList(XMLTypeBase):
 
 
 class MessageType(XMLTypeBase):
-    """This is the base for all classes that are used as the body of a soap envelope.
+    """Base for all classes that are used as the body of a soap envelope.
+
     All derived classes must set these values.
-    NODETYPE defines the qualified name of the Element, action is used for the action element
-    in the soap header."""
-    NODETYPE = None
+    - NODETYPE defines the qualified name of the Element
+    - action is used for the action element in the soap header.
+    """
+
     action = None
     additional_namespaces = ()  # derived class list namespaces other than PM and MSG

@@ -34,6 +34,10 @@ class ContainerBase:
         """Ignore default value and implied value, e.g. return None if value is not present in xml."""
         return getattr(self.__class__, attr_name).get_actual_value(self)
 
+    def get_xml_value(self, attr_name: str) -> Any:
+        """Ignore default value and implied value, e.g. return None if value is not present in xml."""
+        return getattr(self.__class__, attr_name).get_xml_value(self)
+
     def mk_node(self, tag: QName, ns_helper: NamespaceHelper, set_xsi_type: bool = False) -> xml_utils.LxmlElement:
         """Create an etree node from instance data.
 
