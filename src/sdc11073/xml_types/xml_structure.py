@@ -16,7 +16,6 @@ from typing import TYPE_CHECKING, Any, Callable
 
 from lxml import etree as etree_
 
-from sdc11073 import xml_utils
 from sdc11073.exceptions import ApiUsageError
 from sdc11073.namespaces import QN_TYPE, docname_from_qname, text_to_qname
 
@@ -33,15 +32,14 @@ from .dataconverters import (
     StringConverter,
     TimestampConverter,
 )
+from sdc11073 import xml_utils
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Sequence
     from decimal import Decimal
-
-    from sdc11073.mdib.containerbase import ContainerBase
     from sdc11073.namespaces import NamespaceHelper
     from sdc11073.xml_types.basetypes import XMLTypeBase
-
+    from sdc11073.mdib.containerbase import ContainerBase
     from .dataconverters import DataConverterProtocol
     from .isoduration import DurationType
 
@@ -864,11 +862,28 @@ class NodeTextQNameProperty(NodeTextProperty):
         return str(py_value)
 
     def update_xml_value(self, instance: Any, node: xml_utils.LxmlElement):
-        """Set _local_var_name_xml here (namespaces are known here), and then call parent class update_xml_value."""
-        py_value = getattr(instance, self._local_var_name)
-        xml_value = docname_from_qname(py_value, node.nsmap)
-        setattr(instance, self._local_var_name_xml, xml_value)
-        super().update_xml_value(instance, node)
+        """Write value to node."""
+        try:
+            py_value = getattr(instance, self._local_var_name)
+        except AttributeError:  # set to None (it is in the responsibility of the called method to do the right thing)
+            py_value = None
+
+        if py_value is None:
+            if not self._sub_element_name:
+                # update text of this element
+                node.text = ''
+            elif self.is_optional:
+                sub_node = node.find(self._sub_element_name)
+                if sub_node is not None:
+                    node.remove(sub_node)
+            else:
+                if MANDATORY_VALUE_CHECKING and not self.is_optional:
+                    raise ValueError(f'mandatory value {self._sub_element_name} missing')
+                sub_node = self._get_element_by_child_name(node, self._sub_element_name, create_missing_nodes=True)
+                sub_node.text = None
+        else:
+            sub_node = self._get_element_by_child_name(node, self._sub_element_name, create_missing_nodes=True)
+            sub_node.text = py_value  # this adds the namesoace to sube_node.nsmap
 
 
 def _compare_extension(left: xml_utils.LxmlElement, right: xml_utils.LxmlElement) -> bool:
@@ -1047,12 +1062,11 @@ class SubElementProperty(_SubElementBase):
                     raise ValueError(f'mandatory value {self._sub_element_name} missing')
                 etree_.SubElement(node, self._sub_element_name, nsmap=node.nsmap)
         else:
-            sub_node = py_value.as_etree_node(self._sub_element_name, node.nsmap)
+            sub_node = py_value.as_etree_node(self._sub_element_name, node.nsmap, node)
             if hasattr(py_value, 'NODETYPE') and hasattr(self.value_class, 'NODETYPE') \
                     and py_value.NODETYPE != self.value_class.NODETYPE:
                 # set xsi type
                 sub_node.set(QN_TYPE, docname_from_qname(py_value.NODETYPE, node.nsmap))
-            node.append(sub_node)
 
 
 class ContainerProperty(_SubElementBase):
@@ -1101,11 +1115,10 @@ class ContainerProperty(_SubElementBase):
                 etree_.SubElement(node, self._sub_element_name, nsmap=node.nsmap)
         else:
             self.remove_sub_element(node)
-            sub_node = py_value.mk_node(self._sub_element_name, self._ns_helper)
+            sub_node = py_value.mk_node(self._sub_element_name, self._ns_helper, node)
             if py_value.NODETYPE != self.value_class.NODETYPE:
                 # set xsi type
                 sub_node.set(QN_TYPE, docname_from_qname(py_value.NODETYPE, node.nsmap))
-            node.append(sub_node)
 
 
 class _ElementListProperty(_ElementBase, ABC):
@@ -1122,8 +1135,6 @@ class _ElementListProperty(_ElementBase, ABC):
             return getattr(instance, self._local_var_name)
 
     def __set__(self, instance: Any, py_value: Iterable[Any] | None):
-        # if isinstance(py_value, tuple):
-        #     py_value = list(py_value)
         if py_value is not None and  not isinstance(py_value, list):
             py_value = list(py_value)
         super().__set__(instance, py_value)
@@ -1213,12 +1224,11 @@ class SubElementListProperty(_SubElementListProperty):
 
         if py_value is not None:
             for val in py_value:
-                sub_node = val.as_etree_node(self._sub_element_name, node.nsmap)
+                sub_node = val.as_etree_node(self._sub_element_name, node.nsmap, node)
                 if hasattr(val, 'NODETYPE') and hasattr(self.value_class, 'NODETYPE') \
                         and val.NODETYPE != self.value_class.NODETYPE:
                     # set xsi type
                     sub_node.set(QN_TYPE, docname_from_qname(val.NODETYPE, node.nsmap))
-                node.append(sub_node)
 
     def __repr__(self) -> str:
         return f'{self.__class__.__name__} datatype {self.value_class.__name__} in subelement {self._sub_element_name}'
@@ -1285,11 +1295,10 @@ class ContainerListProperty(_SubElementListProperty):
         # ... and create new ones
         if py_value is not None:
             for val in py_value:
-                sub_node = val.mk_node(self._sub_element_name, self._ns_helper)
+                sub_node = val.mk_node(self._sub_element_name, self._ns_helper, node)
                 if val.NODETYPE != self.value_class.NODETYPE:
                     # set xsi type
                     sub_node.set(QN_TYPE, docname_from_qname(val.NODETYPE, node.nsmap))
-                node.append(sub_node)
 
     def __repr__(self) -> str:
         return f'{self.__class__.__name__} datatype {self.value_class.__name__} in subelement {self._sub_element_name}'
@@ -1443,7 +1452,7 @@ class AnyEtreeNodeListProperty(_ElementListProperty):
         sub_node.extend(py_value)
 
     def __str__(self) -> str:
-        return f'{self.__class__.__name__} in subelement {self._sub_element_name}'
+        return f'{self.__class__.__name__} in sub-element {self._sub_element_name}'
 
 
 class NodeTextListProperty(_SingleElementListProperty):
