@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from sdc11073.mdib.entityaccess import Entity
 from sdc11073.provider.operations import ExecuteResult
 
 from .nomenclature import NomenclatureCodes
@@ -32,27 +33,50 @@ class GenericSDCClockProvider(ProviderRole):
         self.MDC_OP_SET_TIME_SYNC_REF_SRC = pm_types.CodedValue(NomenclatureCodes.MDC_OP_SET_TIME_SYNC_REF_SRC)
         self.MDC_ACT_SET_TIME_ZONE = pm_types.CodedValue(NomenclatureCodes.MDC_ACT_SET_TIME_ZONE)
 
+    # def init_operations(self, sco: AbstractScoOperationsRegistry):
+    #     """Create a ClockDescriptor and ClockState in mdib if they do not exist in mdib."""
+    #     super().init_operations(sco)
+    #     pm_types = self._mdib.data_model.pm_types
+    #     pm_names = self._mdib.data_model.pm_names
+    #     clock_entity = self._mdib.entities.NODETYPE.get_one(pm_names.ClockDescriptor, allow_none=True)
+    #     # clock_descriptor = self._mdib.descriptions.NODETYPE.get_one(pm_names.ClockDescriptor,
+    #     #                                                             allow_none=True)
+    #     if clock_descriptor is None:
+    #         mds_container = self._mdib.descriptions.NODETYPE.get_one(pm_names.MdsDescriptor)
+    #         clock_descr_handle = 'clock_' + mds_container.Handle
+    #         self._logger.debug('creating a clock descriptor, handle=%s', clock_descr_handle)
+    #         clock_descriptor = self._create_clock_descriptor_container(
+    #             handle=clock_descr_handle,
+    #             parent_handle=mds_container.Handle,
+    #             coded_value=pm_types.CodedValue('123'),
+    #             safety_classification=pm_types.SafetyClassification.INF)
+    #         self._mdib.descriptions.add_object(clock_descriptor)
+    #     # clock_state = self._mdib.states.descriptor_handle.get_one(clock_descriptor.Handle, allow_none=True)
+    #     clock_entity = self._mdib.get_entity(clock_descriptor.Handle, allow_none=True)
+    #     if clock_state is None:
+    #         clock_state = self._mdib.data_model.mk_state_container(clock_descriptor)
+    #         self._mdib.states.add_object(clock_state)
+
     def init_operations(self, sco: AbstractScoOperationsRegistry):
         """Create a ClockDescriptor and ClockState in mdib if they do not exist in mdib."""
         super().init_operations(sco)
         pm_types = self._mdib.data_model.pm_types
         pm_names = self._mdib.data_model.pm_names
-        clock_descriptor = self._mdib.descriptions.NODETYPE.get_one(pm_names.ClockDescriptor,
-                                                                    allow_none=True)
-        if clock_descriptor is None:
-            mds_container = self._mdib.descriptions.NODETYPE.get_one(pm_names.MdsDescriptor)
-            clock_descr_handle = 'clock_' + mds_container.Handle
+        clock_entity = self._mdib.entities.NODETYPE.get_one(pm_names.ClockDescriptor, allow_none=True)
+        if clock_entity is None:
+            mds_entity = self._mdib.entities.NODETYPE.get_one(pm_names.MdsDescriptor)
+            clock_descr_handle = 'clock_' + mds_entity.descriptor.Handle
             self._logger.debug('creating a clock descriptor, handle=%s', clock_descr_handle)
             clock_descriptor = self._create_clock_descriptor_container(
                 handle=clock_descr_handle,
-                parent_handle=mds_container.Handle,
+                parent_handle=mds_entity.descriptor.Handle,
                 coded_value=pm_types.CodedValue('123'),
                 safety_classification=pm_types.SafetyClassification.INF)
-            self._mdib.descriptions.add_object(clock_descriptor)
-        clock_state = self._mdib.states.descriptor_handle.get_one(clock_descriptor.Handle, allow_none=True)
-        if clock_state is None:
             clock_state = self._mdib.data_model.mk_state_container(clock_descriptor)
-            self._mdib.states.add_object(clock_state)
+            self._mdib.entities.add_containers(clock_descriptor, clock_state)
+        elif clock_entity.state is None:
+            clock_entity.state = self._mdib.data_model.mk_state_container(clock_entity.descriptor)
+            self._mdib.entities.update_object(clock_entity)
 
     def make_operation_instance(self,
                                 operation_descriptor_container: AbstractOperationDescriptorProtocol,

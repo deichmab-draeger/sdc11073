@@ -17,6 +17,46 @@ if TYPE_CHECKING:
 class GenericSetComponentStateOperationProvider(providerbase.ProviderRole):
     """Class is responsible for SetComponentState operations."""
 
+    # def make_operation_instance(self,
+    #                             operation_descriptor_container: AbstractOperationDescriptorProtocol,
+    #                             operation_cls_getter: OperationClassGetter) -> OperationDefinitionBase | None:
+    #     """Return an operation definition instance for this operation or None.
+    #
+    #     Can handle following case:
+    #     operation_descriptor_container is a SetComponentStateOperationDescriptor and
+    #     target is any AbstractComponentDescriptor.
+    #     """
+    #     pm_names = self._mdib.data_model.pm_names
+    #     operation_target_handle = operation_descriptor_container.OperationTarget
+    #     op_target_descriptor_container = self._mdib.descriptions.handle.get_one(operation_target_handle)
+    #
+    #     if operation_descriptor_container.NODETYPE == pm_names.SetComponentStateOperationDescriptor:  # noqa: SIM300
+    #         if op_target_descriptor_container.NODETYPE in (pm_names.MdsDescriptor,
+    #                                                        pm_names.ChannelDescriptor,
+    #                                                        pm_names.VmdDescriptor,
+    #                                                        pm_names.ClockDescriptor,
+    #                                                        pm_names.ScoDescriptor,
+    #                                                        ):
+    #             op_cls = operation_cls_getter(pm_names.SetComponentStateOperationDescriptor)
+    #             return op_cls(operation_descriptor_container.Handle,
+    #                           operation_target_handle,
+    #                           self._set_component_state,
+    #                           coded_value=operation_descriptor_container.Type)
+    #     elif operation_descriptor_container.NODETYPE == pm_names.ActivateOperationDescriptor:  # noqa: SIM300
+    #         #  on what can activate be called?
+    #         if op_target_descriptor_container.NODETYPE in (pm_names.MdsDescriptor,
+    #                                                        pm_names.ChannelDescriptor,
+    #                                                        pm_names.VmdDescriptor,
+    #                                                        pm_names.ScoDescriptor,
+    #                                                        ):
+    #             # no generic handler to be called!
+    #             op_cls = operation_cls_getter(pm_names.ActivateOperationDescriptor)
+    #             return op_cls(operation_descriptor_container.Handle,
+    #                           operation_target_handle,
+    #                           self._do_nothing,
+    #                           coded_value=operation_descriptor_container.Type)
+    #     return None
+
     def make_operation_instance(self,
                                 operation_descriptor_container: AbstractOperationDescriptorProtocol,
                                 operation_cls_getter: OperationClassGetter) -> OperationDefinitionBase | None:
@@ -28,10 +68,10 @@ class GenericSetComponentStateOperationProvider(providerbase.ProviderRole):
         """
         pm_names = self._mdib.data_model.pm_names
         operation_target_handle = operation_descriptor_container.OperationTarget
-        op_target_descriptor_container = self._mdib.descriptions.handle.get_one(operation_target_handle)
+        op_target_entity = self._mdib.entities.handle.get_one(operation_target_handle)
 
         if operation_descriptor_container.NODETYPE == pm_names.SetComponentStateOperationDescriptor:  # noqa: SIM300
-            if op_target_descriptor_container.NODETYPE in (pm_names.MdsDescriptor,
+            if op_target_entity.descriptor.NODETYPE in (pm_names.MdsDescriptor,
                                                            pm_names.ChannelDescriptor,
                                                            pm_names.VmdDescriptor,
                                                            pm_names.ClockDescriptor,
@@ -44,7 +84,7 @@ class GenericSetComponentStateOperationProvider(providerbase.ProviderRole):
                               coded_value=operation_descriptor_container.Type)
         elif operation_descriptor_container.NODETYPE == pm_names.ActivateOperationDescriptor:  # noqa: SIM300
             #  on what can activate be called?
-            if op_target_descriptor_container.NODETYPE in (pm_names.MdsDescriptor,
+            if op_target_entity.descriptor.NODETYPE in (pm_names.MdsDescriptor,
                                                            pm_names.ChannelDescriptor,
                                                            pm_names.VmdDescriptor,
                                                            pm_names.ScoDescriptor,

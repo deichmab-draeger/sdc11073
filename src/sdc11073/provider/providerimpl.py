@@ -315,6 +315,7 @@ class SdcProvider:
 
     def set_location(self,
                      location: SdcLocation,
+                     location_context_handle: str,
                      validators: list | None = None,
                      publish_now: bool = True):
         """:param location: an SdcLocation instance
@@ -326,7 +327,7 @@ class SdcProvider:
         self._location = location
         if validators is None:
             validators = self._mdib.xtra.default_instance_identifiers
-        self._mdib.xtra.set_location(location, validators)
+        self._mdib.xtra.set_location(location, location_context_handle, validators)
         if publish_now:
             self.publish()
 

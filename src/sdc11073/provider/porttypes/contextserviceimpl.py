@@ -59,6 +59,49 @@ class ContextService(ServiceWithOperations):
         response = data_model.msg_types.SetContextStateResponse()
         return self._handle_operation_request(request_data, set_context_state, response)
 
+    # def _on_get_context_states(self, request_data):
+    #     data_model = self._sdc_definitions.data_model
+    #     pm_names = data_model.pm_names
+    #     self._logger.debug('_on_get_context_states')
+    #     msg_node = request_data.message_data.p_msg.msg_node
+    #     get_context_state = data_model.msg_types.GetContextStates.from_node(msg_node)
+    #     requested_handles = get_context_state.HandleRef
+    #     if len(requested_handles) > 0:
+    #         self._logger.info('_on_get_context_states requested Handles:{}', requested_handles)
+    #     with self._mdib.mdib_lock:
+    #         if len(requested_handles) == 0:
+    #             # MessageModel: If the HANDLE reference list is empty, all states in the MDIB SHALL be included in the result list.
+    #             context_state_containers = list(self._mdib.context_states.objects)
+    #         else:
+    #             context_state_containers_lookup = OrderedDict()  # lookup to avoid double entries
+    #             for handle in requested_handles:
+    #                 # If a HANDLE reference does match a multi state HANDLE,
+    #                 # the corresponding multi state SHALL be included in the result list
+    #                 tmp = self._mdib.context_states.handle.get_one(handle, allow_none=True)
+    #                 if tmp:
+    #                     tmp = [tmp]
+    #                 if not tmp:
+    #                     # If a HANDLE reference does match a descriptor HANDLE,
+    #                     # all states that belong to the corresponding descriptor SHALL be included in the result list
+    #                     tmp = self._mdib.context_states.descriptor_handle.get(handle)
+    #                 if not tmp:
+    #                     # R5042: If a HANDLE reference from the msg:GetContextStates/msg:HandleRef list does match an
+    #                     # MDS descriptor, then all context states that are part of this MDS SHALL be included in the result list.
+    #                     descr = self._mdib.descriptions.handle.get_one(handle, allow_none=True)
+    #                     if descr:
+    #                         if pm_names.MdsDescriptor == descr.NODETYPE:
+    #                             tmp = list(self._mdib.context_states.objects)
+    #                 if tmp:
+    #                     for state in tmp:
+    #                         context_state_containers_lookup[state.Handle] = state
+    #             context_state_containers = context_state_containers_lookup.values()
+    #
+    #     response = data_model.msg_types.GetContextStatesResponse()
+    #     response.ContextState.extend(context_state_containers)
+    #     response.set_mdib_version_group(self._mdib.mdib_version_group)
+    #     response_envelope = self._sdc_device.msg_factory.mk_reply_soap_message(request_data, response)
+    #     return response_envelope
+
     def _on_get_context_states(self, request_data):
         data_model = self._sdc_definitions.data_model
         pm_names = data_model.pm_names
@@ -68,33 +111,36 @@ class ContextService(ServiceWithOperations):
         requested_handles = get_context_state.HandleRef
         if len(requested_handles) > 0:
             self._logger.info('_on_get_context_states requested Handles:{}', requested_handles)
+        context_state_containers = []
         with self._mdib.mdib_lock:
             if len(requested_handles) == 0:
                 # MessageModel: If the HANDLE reference list is empty, all states in the MDIB SHALL be included in the result list.
-                context_state_containers = list(self._mdib.context_states.objects)
+                entities = [e for e in self._mdib.entities.objects if e.is_multi_state]
+                for e in entities:
+                    context_state_containers.extend(e.states.values())
             else:
-                context_state_containers_lookup = OrderedDict()  # lookup to avoid double entries
                 for handle in requested_handles:
                     # If a HANDLE reference does match a multi state HANDLE,
                     # the corresponding multi state SHALL be included in the result list
-                    tmp = self._mdib.context_states.handle.get_one(handle, allow_none=True)
-                    if tmp:
-                        tmp = [tmp]
-                    if not tmp:
-                        # If a HANDLE reference does match a descriptor HANDLE,
-                        # all states that belong to the corresponding descriptor SHALL be included in the result list
-                        tmp = self._mdib.context_states.descriptor_handle.get(handle)
-                    if not tmp:
-                        # R5042: If a HANDLE reference from the msg:GetContextStates/msg:HandleRef list does match an
-                        # MDS descriptor, then all context states that are part of this MDS SHALL be included in the result list.
-                        descr = self._mdib.descriptions.handle.get_one(handle, allow_none=True)
-                        if descr:
-                            if pm_names.MdsDescriptor == descr.NODETYPE:
-                                tmp = list(self._mdib.context_states.objects)
-                    if tmp:
-                        for state in tmp:
-                            context_state_containers_lookup[state.Handle] = state
-                context_state_containers = context_state_containers_lookup.values()
+                    tmp_entity = self._mdib.entities.state_handle.get_one(handle, allow_none=True)
+                    if tmp_entity:
+                        state = tmp_entity.states.get(handle)
+                        if state:
+                            context_state_containers.append(state)
+                    else:
+                        tmp_entity = self._mdib.entities.handle.get_one(handle, allow_none=True)
+                        if tmp_entity is not None:
+                            # If a HANDLE reference does match a descriptor HANDLE,
+                            # all states that belong to the corresponding descriptor SHALL be included in the result list
+                            # If a HANDLE reference from the msg:GetContextStates/msg:HandleRef list does match an
+                            # MDS descriptor, then all context states that are part of this MDS SHALL be included in the result list.
+                            if tmp_entity.is_multi_state:
+                                context_state_containers.extend(tmp_entity.states.values())
+                            elif pm_names.MdsDescriptor == tmp_entity.descriptor.NODETYPE:
+                                mds_entities = [e for e in self._mdib.entities.objects if e.is_multi_state
+                                                and e.descriptor.source_mds == pm_names.MdsDescriptor]
+                                for e in mds_entities:
+                                    context_state_containers.extend(e.states.values())
 
         response = data_model.msg_types.GetContextStatesResponse()
         response.ContextState.extend(context_state_containers)

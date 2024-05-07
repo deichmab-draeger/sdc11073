@@ -107,6 +107,26 @@ class GenericWaveformProvider:
         self._last_log_time = 0
         self._last_logged_delay = 0
 
+    # def register_waveform_generator(self, descriptor_handle: str, wf_generator: WaveformGeneratorProtocol):
+    #     """Add wf_generator to waveform sources.
+    #
+    #     :param descriptor_handle: the handle of the RealtimeSampleArray that shall accept this data
+    #     :param wf_generator: a waveforms.WaveformGenerator instance
+    #     """
+    #     sample_period = wf_generator.sample_period
+    #     descriptor_container = self._mdib.descriptions.handle.get_one(descriptor_handle)
+    #     if descriptor_container.SamplePeriod != sample_period:
+    #         # we must inform subscribers
+    #         with self._mdib.descriptor_transaction() as mgr:
+    #             descr = mgr.get_descriptor(descriptor_handle)
+    #             descr.SamplePeriod = sample_period
+    #     if descriptor_handle in self._waveform_generators:
+    #         self._waveform_generators[descriptor_handle].set_waveform_generator(wf_generator)
+    #     else:
+    #         self._waveform_generators[descriptor_handle] = _SampleArrayGenerator(self._mdib.data_model,
+    #                                                                              descriptor_handle,
+    #                                                                              wf_generator)
+
     def register_waveform_generator(self, descriptor_handle: str, wf_generator: WaveformGeneratorProtocol):
         """Add wf_generator to waveform sources.
 
@@ -114,8 +134,8 @@ class GenericWaveformProvider:
         :param wf_generator: a waveforms.WaveformGenerator instance
         """
         sample_period = wf_generator.sample_period
-        descriptor_container = self._mdib.descriptions.handle.get_one(descriptor_handle)
-        if descriptor_container.SamplePeriod != sample_period:
+        entity = self._mdib.entities.handle.get_one(descriptor_handle)
+        if entity.descriptor.SamplePeriod != sample_period:
             # we must inform subscribers
             with self._mdib.descriptor_transaction() as mgr:
                 descr = mgr.get_descriptor(descriptor_handle)

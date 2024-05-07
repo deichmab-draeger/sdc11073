@@ -12,6 +12,8 @@ from sdc11073 import observableproperties as properties
 from sdc11073.etc import apply_map
 from sdc11073.xml_types.pm_types import Coding, have_matching_codes
 
+from .entityaccess import EntityAccess
+
 if TYPE_CHECKING:
     from lxml.etree import QName
     from sdc11073.definitions_base import BaseDefinitions
@@ -209,20 +211,21 @@ class MultiStatesLookup(_MultikeyWithVersionLookup):
             obj.StateVersion = version + 1
 
 
-@dataclass
-class Entity:
-    """Groups descriptor and state."""
+# @dataclass
+# class Entity:
+#     """Groups descriptor and state."""
+#
+#     descriptor: AbstractDescriptorContainer
+#     state: AbstractStateContainer
+#
+#
+# @dataclass
+# class MultiStateEntity:
+#     """Groups descriptor and list of multi-states."""
+#
+#     descriptor: AbstractDescriptorContainer
+#     states: list[AbstractMultiStateContainer]
 
-    descriptor: AbstractDescriptorContainer
-    state: AbstractStateContainer
-
-
-@dataclass
-class MultiStateEntity:
-    """Groups descriptor and list of multi-states."""
-
-    descriptor: AbstractDescriptorContainer
-    states: list[AbstractMultiStateContainer]
 
 
 class MdibBase:
@@ -264,6 +267,8 @@ class MdibBase:
         self.mdib_lock = Lock()
         self.mdstate_version = 0
         self.mddescription_version = 0
+        # allow alternative way of accessing data wia entities
+        self.entities = EntityAccess(self.descriptions, self.states, self.context_states)
 
     @property
     def logger(self) -> LoggerAdapter:
@@ -588,17 +593,17 @@ class MdibBase:
             all_descriptors = self.get_all_descriptors_in_subtree(descriptor_container)
             self.rm_descriptors_and_states(all_descriptors)
 
-    def get_entity(self, handle: str) -> Entity:
-        """Return descriptor and state as Entity."""
-        descr = self.descriptions.handle.get_one(handle)
-        state = self.states.descriptor_handle.get_one(handle)
-        return Entity(descr, state)
-
-    def get_context_entity(self, handle: str) -> MultiStateEntity:
-        """Return descriptor and states as MultiStateEntity."""
-        descr = self.descriptions.handle.get_one(handle)
-        states = self.context_states.descriptor_handle.get(handle)
-        return MultiStateEntity(descr, states)
+    # def get_entity(self, handle: str) -> Entity:
+    #     """Return descriptor and state as Entity."""
+    #     descr = self.descriptions.handle.get_one(handle)
+    #     state = self.states.descriptor_handle.get_one(handle)
+    #     return Entity(descr, state)
+    #
+    # def get_context_entity(self, handle: str) -> MultiStateEntity:
+    #     """Return descriptor and states as MultiStateEntity."""
+    #     descr = self.descriptions.handle.get_one(handle)
+    #     states = self.context_states.descriptor_handle.get(handle)
+    #     return MultiStateEntity(descr, states)
 
     def has_multiple_mds(self) -> bool:
         """Check if there is more than one mds in mdib (convenience method)."""

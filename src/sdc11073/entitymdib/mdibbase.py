@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import traceback
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from threading import Lock
 from typing import TYPE_CHECKING, Any, cast
 
@@ -12,6 +12,7 @@ from sdc11073 import observableproperties as properties
 from sdc11073.etc import apply_map
 from sdc11073.xml_types.pm_types import Coding, have_matching_codes
 from sdc11073.mdib.descriptorcontainers import AbstractOperationDescriptorContainer
+from sdc11073.mdib.entityaccess import EntityBase, Entity, MultiStateEntity
 
 if TYPE_CHECKING:
     from lxml.etree import QName
@@ -19,7 +20,6 @@ if TYPE_CHECKING:
     from sdc11073.loghelper import LoggerAdapter
     from sdc11073.xml_types.pm_types import CodedValue
     from sdc11073 import xml_utils
-    from collections.abc import Iterable
 
     from sdc11073.mdib.descriptorcontainers import AbstractDescriptorContainer
     from sdc11073.mdib.statecontainers import AbstractMultiStateContainer, AbstractStateContainer
@@ -61,92 +61,6 @@ class _MultikeyWithVersionLookup(multikey.MultiKeyLookup):
         super().remove_objects_no_lock(objects)
 
 
-# @dataclass
-# class EntityBase:
-#     """Groups descriptor and state."""
-#
-#     descriptor: AbstractDescriptorContainer
-#
-#
-# @dataclass
-# class Entity(EntityBase):
-#     """Groups descriptor and state."""
-#
-#     state: AbstractStateContainer | None = None
-#
-#     def clear_states(self):
-#         """Remove state from entity."""
-#         self.state = None
-#
-#     def add_state(self, state_container: AbstractStateContainer):
-#         """Set the state of entity."""
-#         if self.state is not None:
-#             raise ValueError(f'entity {self.descriptor.Handle} already has a state')
-#         self.state = state_container
-#
-#     @property
-#     def state_handles(self) ->  Iterable[str]:
-#         """Return the handles of all multi state states (always empty)."""
-#         return []
-
-class EntityBase:
-    """Groups descriptor and state."""
-
-    def __init__(self, descriptor: AbstractDescriptorContainer):
-        self.descriptor = descriptor
-
-    def __str__(self):
-        return f'{self.__class__.__name__} {self.descriptor.NODETYPE.localname} handle {self.descriptor.Handle}'
-
-
-class Entity(EntityBase):
-    """Groups descriptor and state."""
-
-    def __init__(self, descriptor: AbstractDescriptorContainer,
-                 state: AbstractStateContainer | None = None):
-        super().__init__(descriptor)
-        self.state = state
-
-    def clear_states(self):
-        """Remove state from entity."""
-        self.state = None
-
-    def add_state(self, state_container: AbstractStateContainer):
-        """Set the state of entity."""
-        if self.state is not None:
-            raise ValueError(f'entity {self.descriptor.Handle} already has a state')
-        self.state = state_container
-
-    @property
-    def state_handles(self) ->  Iterable[str]:
-        """Return the handles of all multi state states (always empty)."""
-        return []
-
-
-class MultiStateEntity(EntityBase):
-    """Groups descriptor and list of multi-states."""
-
-    def __init__(self, descriptor: AbstractDescriptorContainer):
-        super().__init__(descriptor)
-        self.states: dict[str, AbstractMultiStateContainer] = {}
-
-    def clear_states(self):
-        """Remove all states from entity."""
-        self.states.clear()
-
-    def add_state(self, state_container: AbstractMultiStateContainer):
-        """Add a state to entity."""
-        if state_container.Handle in self.states:
-            # Todo: handle context state update
-            raise ValueError('state already present, todo: fix this!')
-        self.states[state_container.DescriptorHandle] = state_container
-
-    @property
-    def state_handles(self) -> Iterable[str]:
-        """Return the handles of all multi state states."""
-        return self.states.keys()
-
-
 class EntityLookupConsumer(multikey.MultiKeyLookup):
     """EntityLookup is the table-like storage for descriptors.
 
@@ -185,8 +99,12 @@ class EntityLookupConsumer(multikey.MultiKeyLookup):
         self.add_index('state_handle',
                        multikey.IndexDefinition1n(lambda entity: entity.state_handles, index_none_values=False))
 
+def _assert_is_entity(obj):
+    if not isinstance(obj, EntityBase):
+        raise ValueError(f'class {obj.__class__.__name__} cannot be part of entity lookup')
 
-class EntityLookupProvider(_MultikeyWithVersionLookup):
+
+class EntityLookupProvider(multikey.MultiKeyLookup):
     """EntityLookup is the table-like storage for descriptors.
 
     It has the following search indices:
@@ -198,6 +116,7 @@ class EntityLookupProvider(_MultikeyWithVersionLookup):
      - coding is the index for descriptor.coding.
      - condition_signaled is the index for descriptor.ConditionSignaled, it finds only AlertSignalDescriptors.
      - source is the index for descriptor.Source, it finds only AlertConditionDescriptors.
+     - state_handle is the index for the handles of multi states (patient context, location context).
     """
 
     handle: multikey.UIndexDefinition[str, list[Entity | MultiStateEntity]]
@@ -207,7 +126,6 @@ class EntityLookupProvider(_MultikeyWithVersionLookup):
     condition_signaled: multikey.IndexDefinition[str, list[Entity | MultiStateEntity]]
     source: multikey.IndexDefinition[str, list[Entity | MultiStateEntity]]
     state_handle: multikey.UIndexDefinition[str, list[Entity | MultiStateEntity]]
-    # Todo: implement state_handle index
 
     def __init__(self):
         super().__init__()
@@ -223,27 +141,54 @@ class EntityLookupProvider(_MultikeyWithVersionLookup):
                        multikey.IndexDefinition1n(lambda entity: [s.text for s in entity.descriptor.Source], index_none_values=False))
         self.add_index('state_handle',
                        multikey.IndexDefinition1n(lambda entity: entity.state_handles, index_none_values=False))
+        self.handle_version_lookup_descr = {}
+        self.handle_version_lookup_state = {}
 
-    def _save_version(self, obj: AbstractDescriptorContainer):
+
+
+    def _save_descriptor_version(self, obj: AbstractDescriptorContainer):
         # Todo: fix. obj is now an entity, but it must be a state container or descriptor container
-        return
-        # self.handle_version_lookup[obj.Handle] = obj.DescriptorVersion
+        self.handle_version_lookup_descr[obj.Handle] = obj.DescriptorVersion
 
-    def set_version(self, obj: AbstractDescriptorContainer):
+    def set_descriptor_version(self, obj: AbstractDescriptorContainer):
         """Set DescriptorVersion of obj if descriptor with same handle existed before."""
         # Todo: fix. obj is now an entity, but it must be a state container or descriptor container
-        return
-        # version = self.handle_version_lookup.get(obj.Handle)
-        # if version is not None:
-        #     obj.DescriptorVersion = version + 1
+        version = self.handle_version_lookup_descr.get(obj.Handle)
+        if version is not None:
+            obj.DescriptorVersion = version + 1
+
+    def _save_state_version(self, obj: AbstractStateContainer):
+        # Todo: fix. obj is now an entity, but it must be a state container or descriptor container
+        if not obj.is_context_state:
+            self.handle_version_lookup_state[obj.DescriptorHandle] = obj.StateVersion
+
+    def set_state_version(self, obj: AbstractStateContainer):
+        """Set DescriptorVersion of obj if descriptor with same handle existed before."""
+        # Todo: fix. obj is now an entity, but it must be a state container or descriptor container
+        if not obj.is_context_state:
+            version = self.handle_version_lookup_state.get(obj.DescriptorHandle)
+            if version is not None:
+                obj.StateVersion = version + 1
 
     def add_object(self, obj: Entity | MultiStateEntity):
         """Append object with locking."""
         with self._lock:
             self.add_object_no_lock(obj)
 
+    def add_containers(self, descr: AbstractDescriptorContainer, state: AbstractStateContainer | None):
+        """Append Entity(descr, state) with locking."""
+        self.add_object(Entity(descr, state))
+
+    def add_multi_state_containers(self, descr: AbstractDescriptorContainer, states: list[AbstractMultiStateContainer]):
+        """Append MultiStateEntity(descr, states) with locking."""
+        entity = MultiStateEntity(descr)
+        for state in states:
+            entity.add_state(state)
+        self.add_object(entity)
+
     def add_object_no_lock(self, obj: Entity | MultiStateEntity):
         """Append object without locking."""
+        _assert_is_entity(obj)
         super().add_object_no_lock(obj)
 
     def add_objects(self, objects: list[Entity | MultiStateEntity]):
@@ -255,6 +200,8 @@ class EntityLookupProvider(_MultikeyWithVersionLookup):
         """Append objects without locking."""
         apply_map(self.add_object_no_lock, objects)
 
+
+
     def remove_object(self, obj: Entity | MultiStateEntity):
         """Remove object from table."""
         keys = self._object_ids.get(id(obj))
@@ -263,9 +210,12 @@ class EntityLookupProvider(_MultikeyWithVersionLookup):
         with self._lock:
             self.remove_object_no_lock(obj)
 
-    def remove_object_no_lock(self, obj: Entity | MultiStateEntity):
+    def remove_object_no_lock(self, entity: Entity | MultiStateEntity):
         """Remove object from table without locking."""
-        super().remove_object_no_lock(obj)
+        self._save_descriptor_version(entity.descriptor)
+        if not entity.is_multi_state and entity.state is not None:
+            self._save_state_version(entity.state)
+        super().remove_object_no_lock(entity)
 
     def remove_objects(self, objects: list[Entity | MultiStateEntity]):
         """Remove objects from table with locking."""
@@ -407,7 +357,7 @@ class EntityMdibBase:
         child_list = self.entities.parent_handle.get(entity.descriptor.Handle, [])
         # append all child containers, then bring all child elements in correct order
         for child in child_list:
-            child_tag, set_xsi = entity.descriptor.tag_name_for_child_descriptor(child.NODETYPE)
+            child_tag, set_xsi = entity.descriptor.tag_name_for_child_descriptor(child.descriptor.NODETYPE)
             self.make_descriptor_node(child, node, child_tag, set_xsi)
         entity.descriptor.sort_child_nodes(node)
         return node
@@ -434,12 +384,12 @@ class EntityMdibBase:
                                           nsmap=doc_nsmap)
         tag = pm.State
         for entity in self.entities.objects:
-            if not entity.descriptor.is_context_state:
+            if not entity.is_multi_state:
                 if entity.state:
                     md_state_node.append(entity.state.mk_state_node(tag, self.nsmapper))
         if add_context_states:
             for entity in self.entities.objects:
-                if entity.descriptor.is_context_state:
+                if entity.is_multi_state:
                     for state in entity.states.values():
                         md_state_node.append(state.mk_state_node(tag, self.nsmapper))
 
@@ -613,9 +563,23 @@ class EntityMdibBase:
             all_entities = self.get_all_entities_in_subtree(entity)
             self.rm_entities(all_entities)
 
-    def get_entity(self, handle: str) -> Entity:
+    def get_entity(self, handle: str, allow_none: bool) -> Entity | None:
         """Return descriptor and state as Entity."""
-        return self.entities.handle.get_one(handle)
+        entity = self.entities.handle.get_one(handle, allow_none)
+        if entity is None:
+            return None
+        if entity.is_multi_state:
+            raise ValueError('Multi State entity instead of single state entity')
+        return entity
+
+    def get_context_entity(self, handle: str, allow_none: bool) -> MultiStateEntity | None:
+        """Return descriptor and states as MultiStateEntity."""
+        entity = self.entities.handle.get_one(handle, allow_none)
+        if entity is None:
+            return None
+        if not entity.is_multi_state:
+            raise ValueError('Single State entity instead of multi state entity')
+        return entity
 
     def has_multiple_mds(self) -> bool:
         """Check if there is more than one mds in mdib (convenience method)."""

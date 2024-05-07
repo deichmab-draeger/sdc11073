@@ -84,8 +84,9 @@ class OperationDefinitionBase:
         """
         self._logger = loghelper.get_logger_adapter(f'sdc.device.op.{self.__class__.__name__}', log_prefix)
         self._mdib: ProviderMdib | None = None
-        self._descriptor_container = None
-        self._operation_state_container = None
+        # self._descriptor_container = None
+        # self._operation_state_container = None
+        self._operation_entity = None
         self.handle: str = handle
         self.operation_target_handle: str = operation_target_handle
         # documentation of operation_target_handle:
@@ -102,7 +103,10 @@ class OperationDefinitionBase:
 
     @property
     def descriptor_container(self) -> AbstractDescriptorProtocol:  # noqa: D102
-        return self._descriptor_container
+        # return self._descriptor_container
+        if self._operation_entity is None:
+            raise ValueError('OperationDefinition is not initialized')
+        return self._operation_entity.descriptor
 
     def execute_operation(self,
                           soap_request: ReceivedSoapMessage,
@@ -122,14 +126,44 @@ class OperationDefinitionBase:
         """Set on_timeout observable if timeout is detected."""
         if self.last_called_time is None:
             return
-        if self._descriptor_container.InvocationEffectiveTimeout is None:
+        if self.descriptor_container.InvocationEffectiveTimeout is None:
             return
         age = time.time() - self.last_called_time
-        if age < self._descriptor_container.InvocationEffectiveTimeout:
+        if age < self.descriptor_container.InvocationEffectiveTimeout:
             return
         if self._timeout_handler is not None:
             self._timeout_handler(self)
         self.on_timeout = True  # let observable fire
+
+    # def set_mdib(self, mdib: ProviderMdib, parent_descriptor_handle: str):
+    #     """Set mdib reference.
+    #
+    #     The operation needs to know the mdib that it operates on.
+    #     This is called by SubscriptionManager on registration.
+    #     Needs to be implemented by derived classes if specific things have to be initialized.
+    #     """
+    #     if self._mdib is not None:
+    #         raise ApiUsageError('Mdib is already set')
+    #     self._mdib = mdib
+    #     self._logger.log_prefix = mdib.log_prefix  # use same prefix as mdib for logging
+    #     self._descriptor_container = self._mdib.descriptions.handle.get_one(self.handle, allow_none=True)
+    #     if self._descriptor_container is not None:
+    #         # there is already a descriptor
+    #         self._logger.debug('descriptor for operation "%s" is already present, re-using it', self.handle)
+    #     else:
+    #         cls = mdib.data_model.get_descriptor_container_class(self.OP_DESCR_QNAME)
+    #         self._descriptor_container = cls(self.handle, parent_descriptor_handle)
+    #         self._init_operation_descriptor_container()
+    #         # ToDo: transaction context for flexibility to add operations at runtime
+    #         mdib.descriptions.add_object(self._descriptor_container)
+    #
+    #     self._operation_state_container = self._mdib.states.descriptor_handle.get_one(self.handle, allow_none=True)
+    #     if self._operation_state_container is not None:
+    #         self._logger.debug('operation state for operation "%s" is already present, re-using it', self.handle)
+    #     else:
+    #         cls = mdib.data_model.get_state_container_class(self.OP_STATE_QNAME)
+    #         self._operation_state_container = cls(self._descriptor_container)
+    #         mdib.states.add_object(self._operation_state_container)
 
     def set_mdib(self, mdib: ProviderMdib, parent_descriptor_handle: str):
         """Set mdib reference.
@@ -142,29 +176,29 @@ class OperationDefinitionBase:
             raise ApiUsageError('Mdib is already set')
         self._mdib = mdib
         self._logger.log_prefix = mdib.log_prefix  # use same prefix as mdib for logging
-        self._descriptor_container = self._mdib.descriptions.handle.get_one(self.handle, allow_none=True)
-        if self._descriptor_container is not None:
+        self._operation_entity = self._mdib.entities.handle.get_one(self.handle, allow_none=True)
+        if self._operation_entity is not None:
             # there is already a descriptor
             self._logger.debug('descriptor for operation "%s" is already present, re-using it', self.handle)
+            if self._operation_entity.state is None:
+                cls = mdib.data_model.get_state_container_class(self.OP_STATE_QNAME)
+                self._operation_entity.state = cls(self._operation_entity.descriptor)
+                self._mdib.entities.update_object(self._operation_entity)
         else:
             cls = mdib.data_model.get_descriptor_container_class(self.OP_DESCR_QNAME)
-            self._descriptor_container = cls(self.handle, parent_descriptor_handle)
-            self._init_operation_descriptor_container()
-            # ToDo: transaction context for flexibility to add operations at runtime
-            mdib.descriptions.add_object(self._descriptor_container)
-
-        self._operation_state_container = self._mdib.states.descriptor_handle.get_one(self.handle, allow_none=True)
-        if self._operation_state_container is not None:
-            self._logger.debug('operation state for operation "%s" is already present, re-using it', self.handle)
-        else:
+            descriptor_container = cls(self.handle, parent_descriptor_handle)
+            descriptor_container.OperationTarget = self.operation_target_handle
+            if self._coded_value is not None:
+                descriptor_container.Type = self._coded_value
             cls = mdib.data_model.get_state_container_class(self.OP_STATE_QNAME)
-            self._operation_state_container = cls(self._descriptor_container)
-            mdib.states.add_object(self._operation_state_container)
+            state_container = cls(descriptor_container)
+            self._mdib.entities.add_containers(descriptor_container, state_container)
+            self._operation_entity = self._mdib.entities.handle.get_one(self.handle)
 
-    def _init_operation_descriptor_container(self):
-        self._descriptor_container.OperationTarget = self.operation_target_handle
-        if self._coded_value is not None:
-            self._descriptor_container.Type = self._coded_value
+    # def _init_operation_descriptor_container(self):
+    #     self._descriptor_container.OperationTarget = self.operation_target_handle
+    #     if self._coded_value is not None:
+    #         self._descriptor_container.Type = self._coded_value
 
     def set_operating_mode(self, mode: OperatingMode):
         """Set OperatingMode member in state in transaction context."""
@@ -173,7 +207,7 @@ class OperationDefinitionBase:
             state.OperatingMode = mode
 
     def __str__(self):
-        code = None if self._descriptor_container is None else self._descriptor_container.Type
+        code = None if self._operation_entity is None else self._operation_entity.descriptor.Type
         return (f'{self.__class__.__name__} handle={self.handle} code={code} '
                f'operation-target={self.operation_target_handle}')
 

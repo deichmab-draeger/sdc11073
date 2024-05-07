@@ -34,6 +34,50 @@ class GetService(DPWSPortTypeBase):
         hosting_service.register_post_handler(DispatchKey(actions.GetMdDescription, msg_names.GetMdDescription),
                                               self._on_get_md_description)
 
+    # def _on_get_md_state(self, request_data):
+    #     data_model = self._sdc_definitions.data_model
+    #     msg_node = request_data.message_data.p_msg.msg_node
+    #     get_md_state = data_model.msg_types.GetMdState.from_node(msg_node)
+    #     requested_handles = get_md_state.HandleRef
+    #     if len(requested_handles) > 0:
+    #         self._logger.debug('_on_get_md_state from {} req. handles:{}', request_data.peer_name, requested_handles)
+    #     else:
+    #         self._logger.debug('_on_get_md_state from {}', request_data.peer_name)
+    #
+    #     # get the requested state containers from mdib
+    #     state_containers = []
+    #     with self._mdib.mdib_lock:
+    #         if len(requested_handles) == 0:
+    #             # MessageModel: If the HANDLE reference list is empty, all states in the MDIB SHALL be included in the result list.
+    #             state_containers.extend(self._mdib.states.objects)
+    #             if self._sdc_device.contextstates_in_getmdib:
+    #                 state_containers.extend(self._mdib.context_states.objects)
+    #         else:
+    #             if self._sdc_device.contextstates_in_getmdib:
+    #                 for handle in requested_handles:
+    #                     try:
+    #                         # If a HANDLE reference does match a multi state HANDLE, the corresponding multi state SHALL be included in the result list
+    #                         state_containers.append(self._mdib.context_states.handle.get_one(handle))
+    #                     except (KeyError, ValueError):
+    #                         # If a HANDLE reference does match a descriptor HANDLE, all states that belong to the corresponding descriptor SHALL be included in the result list
+    #                         state_containers.extend(self._mdib.states.descriptor_handle.get(handle, []))
+    #                         state_containers.extend(self._mdib.context_states.descriptor_handle.get(handle, []))
+    #             else:
+    #                 for handle in requested_handles:
+    #                     state_containers.extend(self._mdib.states.descriptor_handle.get(handle, []))
+    #
+    #             self._logger.debug('_on_get_md_state requested Handles:{} found {} states', requested_handles,
+    #                                len(state_containers))
+    #
+    #     factory = self._sdc_device.msg_factory
+    #     response = data_model.msg_types.GetMdStateResponse()
+    #     response.MdState.State.extend(state_containers)
+    #     response.set_mdib_version_group(self._mdib.mdib_version_group)
+    #     created_message = factory.mk_reply_soap_message(request_data, response)
+    #     self._logger.debug('_on_get_md_state returns {}',
+    #                        lambda: created_message.serialize())
+    #     return created_message
+
     def _on_get_md_state(self, request_data):
         data_model = self._sdc_definitions.data_model
         msg_node = request_data.message_data.p_msg.msg_node
@@ -49,22 +93,23 @@ class GetService(DPWSPortTypeBase):
         with self._mdib.mdib_lock:
             if len(requested_handles) == 0:
                 # MessageModel: If the HANDLE reference list is empty, all states in the MDIB SHALL be included in the result list.
-                state_containers.extend(self._mdib.states.objects)
-                if self._sdc_device.contextstates_in_getmdib:
-                    state_containers.extend(self._mdib.context_states.objects)
+                for entity in self._mdib.entities.objects:
+                    if not entity.is_multi_state:
+                        state_containers.append(entity.state)
+                    elif self._sdc_device.contextstates_in_getmdib:
+                        state_containers.extend(entity.states.values())
             else:
-                if self._sdc_device.contextstates_in_getmdib:
-                    for handle in requested_handles:
-                        try:
-                            # If a HANDLE reference does match a multi state HANDLE, the corresponding multi state SHALL be included in the result list
-                            state_containers.append(self._mdib.context_states.handle.get_one(handle))
-                        except (KeyError, ValueError):
-                            # If a HANDLE reference does match a descriptor HANDLE, all states that belong to the corresponding descriptor SHALL be included in the result list
-                            state_containers.extend(self._mdib.states.descriptor_handle.get(handle, []))
-                            state_containers.extend(self._mdib.context_states.descriptor_handle.get(handle, []))
-                else:
-                    for handle in requested_handles:
-                        state_containers.extend(self._mdib.states.descriptor_handle.get(handle, []))
+                for handle in requested_handles:
+                    entity = self._mdib.entities.handle.get_one(handle, allow_none=True)
+                    if entity is not None:
+                        if entity.is_multi_state:
+                            state_containers.extend(entity.states.values())
+                        else:
+                            state_containers.append(entity.state)
+                    else:
+                        entity = self._mdib.entities.state_handle.get_one(handle, allow_none=True)
+                        if entity is not None:
+                            state_containers.append(entity.states[handle])
 
                 self._logger.debug('_on_get_md_state requested Handles:{} found {} states', requested_handles,
                                    len(state_containers))
@@ -113,6 +158,25 @@ class GetService(DPWSPortTypeBase):
                            lambda: response.serialize())
         return response
 
+    # def mk_get_mddescription_response_message(self, request_data, mdib, requested_handles):
+    #     """For simplification reason this implementation returns either all descriptors or none."""
+    #     return_all = len(requested_handles) == 0  # if we have handles, we need to check them
+    #     dummy_response = self._sdc_definitions.data_model.msg_types.GetMdDescriptionResponse()
+    #     dummy_response.set_mdib_version_group(mdib.mdib_version_group)
+    #     response = self._sdc_device.msg_factory.mk_reply_soap_message(request_data, dummy_response)
+    #     # now add to payload_element
+    #     response_node = response.p_msg.payload_element
+    #     for handle in requested_handles:
+    #         # if at least one requested handle is valid, return all.
+    #         if mdib.descriptions.handle.get_one(handle, allow_none=True) is not None:
+    #             return_all = True
+    #             break
+    #     if return_all:
+    #         md_description_node, mdib_version_group = mdib.reconstruct_md_description()
+    #         # append all children of md_description_node to msg_names.MdDescription node in response
+    #         response_node[0].extend(md_description_node[:])
+    #     return response
+
     def mk_get_mddescription_response_message(self, request_data, mdib, requested_handles):
         """For simplification reason this implementation returns either all descriptors or none."""
         return_all = len(requested_handles) == 0  # if we have handles, we need to check them
@@ -123,7 +187,7 @@ class GetService(DPWSPortTypeBase):
         response_node = response.p_msg.payload_element
         for handle in requested_handles:
             # if at least one requested handle is valid, return all.
-            if mdib.descriptions.handle.get_one(handle, allow_none=True) is not None:
+            if mdib.entities.handle.get_one(handle, allow_none=True) is not None:
                 return_all = True
                 break
         if return_all:

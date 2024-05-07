@@ -34,6 +34,48 @@ class GenericMetricProvider(ProviderRole):
         super().__init__(mdib, log_prefix)
         self.activation_state_can_remove_metric_value = activation_state_can_remove_metric_value
 
+    # def make_operation_instance(self,
+    #                             operation_descriptor_container: AbstractOperationDescriptorProtocol,
+    #                             operation_cls_getter: OperationClassGetter) -> OperationDefinitionBase | None:
+    #     """Create an OperationDefinition for SetContextStateOperationDescriptor.
+    #
+    #     Handle following cases:
+    #     SetValueOperation, target = NumericMetricDescriptor:
+    #       => handler = _set_numeric_value
+    #     SetStringOperation, target = (Enum)StringMetricDescriptor:
+    #       => handler = _set_string
+    #     SetMetricStateOperationDescriptor, target = any subclass of AbstractMetricDescriptor:
+    #       => handler = _set_metric_state
+    #     """
+    #     pm_names = self._mdib.data_model.pm_names
+    #     operation_target_handle = operation_descriptor_container.OperationTarget
+    #     op_target_descriptor_container = self._mdib.descriptions.handle.get_one(operation_target_handle)
+    #
+    #     if operation_descriptor_container.NODETYPE == pm_names.SetValueOperationDescriptor:  # noqa: SIM300
+    #         if op_target_descriptor_container.NODETYPE == pm_names.NumericMetricDescriptor:  # noqa: SIM300
+    #             op_cls = operation_cls_getter(pm_names.SetValueOperationDescriptor)
+    #             return op_cls(operation_descriptor_container.Handle,
+    #                           operation_target_handle,
+    #                           self._set_numeric_value,
+    #                           coded_value=operation_descriptor_container.Type)
+    #         return None
+    #     if operation_descriptor_container.NODETYPE == pm_names.SetStringOperationDescriptor:  # noqa: SIM300
+    #         if op_target_descriptor_container.NODETYPE in (pm_names.StringMetricDescriptor,
+    #                                                        pm_names.EnumStringMetricDescriptor):
+    #             op_cls = operation_cls_getter(pm_names.SetStringOperationDescriptor)
+    #             return op_cls(operation_descriptor_container.Handle,
+    #                           operation_target_handle,
+    #                           self._set_string,
+    #                           coded_value=operation_descriptor_container.Type)
+    #         return None
+    #     if operation_descriptor_container.NODETYPE == pm_names.SetMetricStateOperationDescriptor:  # noqa: SIM300
+    #         op_cls = operation_cls_getter(pm_names.SetMetricStateOperationDescriptor)
+    #         return op_cls(operation_descriptor_container.Handle,
+    #                       operation_target_handle,
+    #                       self._set_metric_state,
+    #                       coded_value=operation_descriptor_container.Type)
+    #     return None
+
     def make_operation_instance(self,
                                 operation_descriptor_container: AbstractOperationDescriptorProtocol,
                                 operation_cls_getter: OperationClassGetter) -> OperationDefinitionBase | None:
@@ -49,10 +91,10 @@ class GenericMetricProvider(ProviderRole):
         """
         pm_names = self._mdib.data_model.pm_names
         operation_target_handle = operation_descriptor_container.OperationTarget
-        op_target_descriptor_container = self._mdib.descriptions.handle.get_one(operation_target_handle)
+        op_target_descriptor_entity = self._mdib.entities.handle.get_one(operation_target_handle)
 
         if operation_descriptor_container.NODETYPE == pm_names.SetValueOperationDescriptor:  # noqa: SIM300
-            if op_target_descriptor_container.NODETYPE == pm_names.NumericMetricDescriptor:  # noqa: SIM300
+            if op_target_descriptor_entity.descriptor.NODETYPE == pm_names.NumericMetricDescriptor:  # noqa: SIM300
                 op_cls = operation_cls_getter(pm_names.SetValueOperationDescriptor)
                 return op_cls(operation_descriptor_container.Handle,
                               operation_target_handle,
@@ -60,7 +102,7 @@ class GenericMetricProvider(ProviderRole):
                               coded_value=operation_descriptor_container.Type)
             return None
         if operation_descriptor_container.NODETYPE == pm_names.SetStringOperationDescriptor:  # noqa: SIM300
-            if op_target_descriptor_container.NODETYPE in (pm_names.StringMetricDescriptor,
+            if op_target_descriptor_entity.descriptor.NODETYPE in (pm_names.StringMetricDescriptor,
                                                            pm_names.EnumStringMetricDescriptor):
                 op_cls = operation_cls_getter(pm_names.SetStringOperationDescriptor)
                 return op_cls(operation_descriptor_container.Handle,

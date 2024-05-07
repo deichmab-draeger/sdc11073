@@ -46,7 +46,8 @@ from sdc11073.provider.subscriptionmgr_async import SubscriptionsManagerReferenc
 from sdc11073.wsdiscovery import WSDiscovery
 from sdc11073.namespaces import default_ns_helper
 from tests import utils
-from tests.mockstuff import SomeDevice, dec_list
+from tests.mockstuff import dec_list
+from tests.somedeviceentity import SomeDeviceEntity as SomeDevice
 
 ENABLE_COMMLOG = False
 if ENABLE_COMMLOG:
@@ -60,7 +61,6 @@ CLIENT_VALIDATE = True
 SET_TIMEOUT = 10  # longer timeout than usually needed, but jenkins jobs frequently failed with 3 seconds timeout
 NOTIFICATION_TIMEOUT = 5  # also jenkins related value
 
-# mdib_70041 = '70041_MDIB_Final.xml'
 mdib_70041 = '70041_MDIB_multi.xml'
 
 
@@ -86,7 +86,7 @@ def provide_realtime_data(sdc_device):
 
 
 def runtest_basic_connect(unit_test, sdc_client):
-    # simply check that correct top node is returned
+    """Simply check that correct top node is returned."""
     cl_get_service = sdc_client.client('Get')
     get_result = cl_get_service.get_mdib()
     descriptor_containers, state_containers = get_result.result
@@ -105,6 +105,7 @@ def runtest_basic_connect(unit_test, sdc_client):
 
 
 def runtest_directed_probe(unit_test, sdc_client, sdc_device):
+    """Check that directed Probe is supported."""
     probe_matches = sdc_client.send_probe()
     unit_test.assertEqual(1, len(probe_matches.ProbeMatch))
     probe_match = probe_matches.ProbeMatch[0]
@@ -114,6 +115,7 @@ def runtest_directed_probe(unit_test, sdc_client, sdc_device):
 
 
 def runtest_realtime_samples(unit_test, sdc_device, sdc_client):
+    """Check that real time samples are supported."""
     # a random number for maxRealtimeSamples, not too big, otherwise we have to wait too long.
     # But wait long enough to have at least one full waveform period in buffer for annotations.
     client_mdib = EntityConsumerMdib(sdc_client, max_realtime_samples=297)
@@ -210,7 +212,6 @@ def runtest_metric_reports(unit_test, sdc_device, sdc_client, logger, test_perio
 
     # verify that client automatically got the state (via EpisodicMetricReport )
     coll.result(timeout=NOTIFICATION_TIMEOUT)
-    # cl_state1 = cl_mdib.states.descriptor_handle.get_one(descriptor_handle)
     cl_entity1 = cl_mdib.entities.handle.get_one(descriptor_handle)
     unit_test.assertEqual(cl_entity1.state.MetricValue.Value, first_value)
     unit_test.assertAlmostEqual(cl_entity1.state.MetricValue.DeterminationTime, now, delta=0.01)
@@ -230,7 +231,6 @@ def runtest_metric_reports(unit_test, sdc_device, sdc_client, logger, test_perio
 
     # verify that client automatically got the state (via EpisodicMetricReport )
     coll.result(timeout=NOTIFICATION_TIMEOUT)
-    # cl_state1 = cl_mdib.states.descriptor_handle.get_one(descriptor_handle)
     cl_entity1 = cl_mdib.entities.handle.get_one(descriptor_handle)
     unit_test.assertEqual(cl_entity1.state.MetricValue.Value, new_value)
     unit_test.assertEqual(cl_entity1.state.StateVersion, 2)  # this is the 2nd state update after init
@@ -243,238 +243,10 @@ def runtest_metric_reports(unit_test, sdc_device, sdc_client, logger, test_perio
         unit_test.assertGreaterEqual(len(report.ReportPart), 1)
 
 
-# class ClientDeviceSSLIntegration(unittest.TestCase):
-#     """
-#     Integration test for the sdc11073 client and sdc11073 device regarding their usage of ssl context objects.
-#     """
-#
-#     @staticmethod
-#     def wrap_socket(self, sock, *args, **kwargs):
-#
-#         def accept(self, *args, **kwargs):
-#             conn, address = self.old_accept(*args, **kwargs)
-#
-#             sock.branches.append(conn)
-#
-#             return conn, address
-#
-#         new_socket = self.old_wrap_socket(sock.s, *args, **kwargs)
-#         new_socket.old_accept = new_socket.accept
-#         new_socket.accept = accept.__get__(new_socket, socket.SocketType)
-#
-#         m = unittest.mock.Mock(wraps=new_socket)
-#         sock.w.append(m)
-#
-#         return m
-#
-#     def test_basic_connection_with_different_ssl_contexts(self):
-#         """
-#         Test that client and server contexts are used only for their intended purpose.
-#         """
-#         client_ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-#         server_ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-#
-#         client_ssl_context.check_hostname = False
-#
-#         client_ssl_context.verify_mode = ssl.CERT_NONE
-#         server_ssl_context.verify_mode = ssl.CERT_NONE
-#
-#         # this is intentionally unsafe so that the unittest is simplified to work without dh params and rsa keys
-#         client_ssl_context.set_ciphers('ALL:@SECLEVEL=0')
-#         server_ssl_context.set_ciphers('ALL:@SECLEVEL=0')
-#
-#         client_ssl_context_wrap_socket_mock = unittest.mock.Mock(
-#             side_effect=self.wrap_socket.__get__(client_ssl_context, ssl.SSLContext))
-#         server_ssl_context_wrap_socket_mock = unittest.mock.Mock(
-#             side_effect=self.wrap_socket.__get__(server_ssl_context, ssl.SSLContext))
-#
-#         client_ssl_context.old_wrap_socket = client_ssl_context.wrap_socket
-#         client_ssl_context.wrap_socket = client_ssl_context_wrap_socket_mock
-#         server_ssl_context.old_wrap_socket = server_ssl_context.wrap_socket
-#         server_ssl_context.wrap_socket = server_ssl_context_wrap_socket_mock
-#
-#         ssl_context_container = sdc11073.certloader.SSLContextContainer(client_context=client_ssl_context,
-#                                                                         server_context=server_ssl_context)
-#
-#         original_socket_socket = socket.socket
-#
-#         def socket_init_side_effect(*args, **kwargs):
-#
-#             s = original_socket_socket(*args, **kwargs)
-#             m = unittest.mock.Mock(wraps=s)
-#
-#             m.s = s
-#             m.w = list()
-#
-#             m.branches = list()
-#
-#             m.family = s.family
-#             m.proto = s.proto
-#             m.type = s.type
-#
-#             return m
-#
-#         class SocketSocketMock(unittest.mock.Mock):
-#
-#             def __instancecheck__(self, instance):
-#                 return original_socket_socket.__instancecheck__(instance)
-#
-#         socket_socket_mock = SocketSocketMock(side_effect=socket_init_side_effect)
-#
-#         with unittest.mock.patch.object(socket, 'socket', new=socket_socket_mock):
-#
-#             self._run_client_with_device(ssl_context_container)
-#
-#         socket_socket_mock.assert_called()
-#
-#         self.assertGreaterEqual(len(client_ssl_context_wrap_socket_mock.call_args_list), 1)
-#
-#         for call_arg in client_ssl_context_wrap_socket_mock.call_args_list:
-#             if call_arg[0]:
-#                 # TODO: replace call_arg[0] with call_arg.args when Python 3.7 support is dropped
-#                 sock = call_arg[0][0]
-#             else:
-#                 # TODO: replace call_arg[1] with call_arg.kwargs when Python 3.7 support is dropped
-#                 sock = call_arg[1]['sock']
-#
-#             self.assertIn(unittest.mock.call.connect(unittest.mock.ANY), sock.method_calls)
-#             self.assertNotIn(unittest.mock.call.listen(unittest.mock.ANY), sock.method_calls)
-#             self.assertNotIn(unittest.mock.call.listen(), sock.method_calls)
-#
-#         self.assertGreaterEqual(len(server_ssl_context_wrap_socket_mock.call_args_list), 1)
-#
-#         branches = list()
-#
-#         for call_arg in server_ssl_context_wrap_socket_mock.call_args_list:
-#             if call_arg[0]:
-#                 sock = call_arg[0][0]
-#             else:
-#                 sock = call_arg[1]['sock']
-#
-#             branches.extend(sock.branches)
-#
-#         for call_arg in server_ssl_context_wrap_socket_mock.call_args_list:
-#             if call_arg[0]:
-#                 sock = call_arg[0][0]
-#             else:
-#                 sock = call_arg[1]['sock']
-#
-#             self.assertNotIn(unittest.mock.call.connect(unittest.mock.ANY), sock.method_calls)
-#             self.assertTrue(unittest.mock.call.listen(unittest.mock.ANY) in sock.method_calls or
-#                             unittest.mock.call.listen() in sock.method_calls or set(sock.w).intersection(branches))
-#
-#     def test_mk_ssl_contexts(self):
-#         """
-#         Test that sdc11073.certloader.mk_ssl_contexts_from_folder creates different contexts for client and device.
-#         """
-#         original_ssl_context = ssl.SSLContext
-#
-#         ssl_context_mock_list: list[unittest.mock.Mock] = list()
-#
-#         def ssl_context_init_side_effect(*args, **kwargs):
-#             s = original_ssl_context(*args, **kwargs)
-#             m = unittest.mock.Mock(wraps=s)
-#
-#             m.load_cert_chain = unittest.mock.MagicMock()
-#             m.load_verify_locations = unittest.mock.MagicMock()
-#
-#             ssl_context_mock_list.append(m)
-#             return m
-#
-#         ssl_context_mock = unittest.mock.Mock(side_effect=ssl_context_init_side_effect)
-#
-#         with unittest.mock.patch.object(ssl, 'SSLContext', new=ssl_context_mock):
-#             return_value = sdc11073.certloader.mk_ssl_contexts(key_file=unittest.mock.MagicMock(),
-#                                                                cert_file=unittest.mock.MagicMock(),
-#                                                                ca_file=unittest.mock.MagicMock())
-#
-#         self.assertNotEqual(return_value.client_context, return_value.server_context)
-#
-#         ssl_context_mock.assert_called()
-#         ssl_context_mock.assert_any_call(ssl.PROTOCOL_TLS_CLIENT)
-#         ssl_context_mock.assert_any_call(ssl.PROTOCOL_TLS_SERVER)
-#
-#         self.assertGreaterEqual(len(ssl_context_mock_list), 2)
-#
-#         for context_mock in ssl_context_mock_list:
-#             context_mock.load_cert_chain.assert_called()
-#             context_mock.load_verify_locations.assert_called()
-#
-#     @staticmethod
-#     def _run_client_with_device(ssl_context_container):
-#         basic_logging_setup()
-#         log_watcher = loghelper.LogWatcher(logging.getLogger('sdc'), level=logging.ERROR)
-#         wsd = WSDiscovery('127.0.0.1')
-#         wsd.start()
-#         location = SdcLocation(fac='fac1', poc='CU1', bed='Bed')
-#         sdc_device = SomeDevice.from_mdib_file(wsd, None, mdib_70041, ssl_context_container=ssl_context_container)
-#         sdc_device.start_all(periodic_reports_interval=1.0)
-#         _loc_validators = [pm_types.InstanceIdentifier('Validator', extension_string='System')]
-#         sdc_device.set_location(location, _loc_validators)
-#         provide_realtime_data(sdc_device)
-#
-#         time.sleep(0.5)
-#         specific_components = SdcConsumerComponents(
-#             action_dispatcher_class=RequestDispatcher
-#         )
-#
-#         x_addr = sdc_device.get_xaddrs()
-#         sdc_client = SdcConsumer(x_addr[0],
-#                                  sdc_definitions=sdc_device.mdib.sdc_definitions,
-#                                  ssl_context_container=ssl_context_container,
-#                                  validate=CLIENT_VALIDATE,
-#                                  specific_components=specific_components)
-#         sdc_client.start_all(not_subscribed_actions=periodic_actions)
-#         time.sleep(1.5)
-#
-#         log_watcher.setPaused(True)
-#         if sdc_device:
-#             sdc_device.stop_all()
-#         if sdc_client:
-#             sdc_client.stop_all()
-#         wsd.stop()
-#
-#         log_watcher.check()
-#
-#     def test_mk_ssl_raises_file_not_found_error(self):
-#         """Verify that a FileNotFoundError is raised if a cypher file is specified but not found."""
-#         with self.assertRaises(FileNotFoundError):
-#             sdc11073.certloader.mk_ssl_contexts_from_folder(ca_folder=pathlib.Path())
-#         with self.assertRaises(FileNotFoundError):
-#             sdc11073.certloader.mk_ssl_contexts_from_folder(ca_folder=unittest.mock.MagicMock())
-#         with self.assertRaises(FileNotFoundError):
-#             sdc11073.certloader.mk_ssl_contexts(key_file=pathlib.Path(str(uuid.uuid4())),
-#                                                 cert_file=unittest.mock.MagicMock())
-#         with self.assertRaises(FileNotFoundError):
-#             sdc11073.certloader.mk_ssl_contexts(key_file=unittest.mock.MagicMock(),
-#                                                 cert_file=pathlib.Path(str(uuid.uuid4())))
-#         with self.assertRaises(FileNotFoundError):
-#             sdc11073.certloader.mk_ssl_contexts(key_file=unittest.mock.MagicMock(),
-#                                                 cert_file=unittest.mock.MagicMock(),
-#                                                 ca_file=pathlib.Path(str(uuid.uuid4())))
-#
-#     @unittest.mock.patch('sdc11073.certloader.mk_ssl_contexts')
-#     def test_mk_ssl_raises_file_not_found_error_with_cipher_file(self, mocked: unittest.mock.MagicMock):
-#         """Verify that a FileNotFoundError is raised if a cypher file is specified but not found."""
-#         with self.assertRaises(FileNotFoundError):
-#             sdc11073.certloader.mk_ssl_contexts_from_folder(ca_folder=unittest.mock.MagicMock(), cyphers_file='lorem')
-#         self.assertFalse(mocked.called)
-#
-#     @unittest.mock.patch('sdc11073.certloader.mk_ssl_contexts')
-#     @unittest.mock.patch('pathlib.Path.read_text')
-#     def test_cyphers(self, read_text_mock: unittest.mock.MagicMock, mk_ssl_contexts_mock: unittest.mock.MagicMock):
-#         def _read_text():
-#             return """# this is the ciphers file
-# # this is a comment
-# secret_ciphers_string
-# ignored"""
-#         read_text_mock.side_effect = _read_text
-#         sdc11073.certloader.mk_ssl_contexts_from_folder(ca_folder=unittest.mock.MagicMock(), cyphers_file='lorem')
-#         mk_ssl_contexts_mock.assert_called_once()
-#         self.assertEqual(mk_ssl_contexts_mock.call_args.args[3], 'secret_ciphers_string')
-#
 
 class Test_Client_SomeDevice(unittest.TestCase):
+    """Tests with a consumer and a provider."""
+
     def setUp(self):
         basic_logging_setup()
         self.logger = get_logger_adapter('sdc.test')
@@ -487,8 +259,11 @@ class Test_Client_SomeDevice(unittest.TestCase):
                                                     max_subscription_duration=10)  # shorter duration for faster tests
         # in order to test correct handling of default namespaces, we make participant model the default namespace
         self.sdc_device.start_all(periodic_reports_interval=1.0)
+        location_entities = self.sdc_device.mdib.entities.NODETYPE.get(pm.LocationContextDescriptor)
         self._loc_validators = [pm_types.InstanceIdentifier('Validator', extension_string='System')]
-        self.sdc_device.set_location(utils.random_location(), self._loc_validators)
+        for loc in location_entities:
+            self.sdc_device.set_location(utils.random_location(), loc.descriptor.Handle, self._loc_validators)
+
         provide_realtime_data(self.sdc_device)
 
         time.sleep(0.5)  # allow init of devices to complete
@@ -543,8 +318,9 @@ class Test_Client_SomeDevice(unittest.TestCase):
         self.sdc_device.contextstates_in_getmdib = False  # provider does not add context states to GetMdibResponse
         cl_mdib = EntityConsumerMdib(self.sdc_client)
         cl_mdib.init_mdib()
-        context_states_count = sum([len(e.state_handles) for e in cl_mdib.entities.objects if e.descriptor.is_context_descriptor])
-        self.assertEqual(len(self.sdc_device.mdib.context_states.objects), context_states_count)
+        cl_context_states_count = sum([len(e.state_handles) for e in cl_mdib.entities.objects if e.descriptor.is_context_descriptor])
+        dev_context_states_count = sum([len(e.state_handles) for e in self.sdc_device.mdib.entities.objects if e.descriptor.is_context_descriptor])
+        self.assertEqual(dev_context_states_count, cl_context_states_count)
 
     def test_renew_get_status(self):
         for s in self.sdc_client._subscription_mgr.subscriptions.values():
@@ -590,7 +366,7 @@ class Test_Client_SomeDevice(unittest.TestCase):
                     s.is_subscribed = True
 
     def test_client_stop(self):
-        """ verify that sockets get closed"""
+        """Verify that sockets get closed."""
         cl_mdib = EntityConsumerMdib(self.sdc_client)
         cl_mdib.init_mdib()
 
@@ -713,8 +489,7 @@ class Test_Client_SomeDevice(unittest.TestCase):
         self.sdc_client = None
 
     def test_get_md_state_parameters(self):
-        """ verify that get_md_state correctly handles call parameters
-        """
+        """Verify that get_md_state correctly handles call parameters."""
         cl_get_service = self.sdc_client.client('Get')
         result = cl_get_service.get_md_state(['0x34F05500'])
         self.assertEqual(1, len(result.result.MdState.State))
@@ -722,8 +497,7 @@ class Test_Client_SomeDevice(unittest.TestCase):
         self.assertEqual(0, len(result.result.MdState.State))
 
     def test_get_md_description_parameters(self):
-        """ verify that getMdDescription correctly handles call parameters
-        """
+        """Verify that getMdDescription correctly handles call parameters."""
         cl_get_service = self.sdc_client.client('Get')
         message_data = cl_get_service.get_md_description(['not_existing_handle'])
         node = message_data.p_msg.msg_node
@@ -736,7 +510,7 @@ class Test_Client_SomeDevice(unittest.TestCase):
         self.assertTrue(existing_handle.encode('utf-8') in message_data.p_msg.raw_data)
 
     def test_instance_id(self):
-        """ verify that the client receives correct EpisodicMetricReports and PeriodicMetricReports"""
+        """Verify that the client receives correct EpisodicMetricReports and PeriodicMetricReports."""
         cl_mdib = EntityConsumerMdib(self.sdc_client)
         cl_mdib.init_mdib()
         self.assertEqual(self.sdc_device.mdib.sequence_id, cl_mdib.sequence_id)
@@ -771,7 +545,7 @@ class Test_Client_SomeDevice(unittest.TestCase):
         runtest_metric_reports(self, self.sdc_device, self.sdc_client, self.logger)
 
     def test_roundtrip_times(self):
-        # run a test that sens notifications
+        """Verify that round trip times are measured."""
         runtest_metric_reports(self, self.sdc_device, self.sdc_client, self.logger)
         # expect at least one subscription with roundtrip stats and reasonable values
         found = False
@@ -787,7 +561,7 @@ class Test_Client_SomeDevice(unittest.TestCase):
         self.assertTrue(found)
 
     def test_alert_reports(self):
-        """ verify that the client receives correct EpisodicAlertReports and PeriodicAlertReports"""
+        """Verify that the client receives correct EpisodicAlertReports and PeriodicAlertReports."""
         client_mdib = EntityConsumerMdib(self.sdc_client)
         client_mdib.init_mdib()
 
@@ -795,11 +569,11 @@ class Test_Client_SomeDevice(unittest.TestCase):
         coll2 = observableproperties.SingleValueCollector(self.sdc_client, 'periodic_alert_report')
 
         # pick an AlertCondition for testing
-        alert_condition_state = self.sdc_device.mdib.states.NODETYPE[pm.AlertConditionState][0]
-        descriptor_handle = alert_condition_state.DescriptorHandle
+        alert_condition_entity = self.sdc_device.mdib.entities.NODETYPE[pm.AlertConditionDescriptor][0]
+        descriptor_handle = alert_condition_entity.descriptor.Handle
 
         # there are possible rounding problems in timestamps.
-        # calculate a max_float_diff for max. 1 millisecond difference.
+        # calculate a max_float_diff for max. 1 ms difference.
         now = time.time()
         max_float_diff_1ms = (now + 0.001) / now - 1
 
@@ -820,8 +594,8 @@ class Test_Client_SomeDevice(unittest.TestCase):
             self.assertEqual(entity.state.diff(st, max_float_diff=max_float_diff_1ms), None)
 
         # pick an AlertSignal for testing
-        alert_condition_state = self.sdc_device.mdib.states.NODETYPE[pm.AlertSignalState][0]
-        descriptor_handle = alert_condition_state.DescriptorHandle
+        alert_signal_entity = self.sdc_device.mdib.entities.NODETYPE[pm.AlertSignalDescriptor][0]
+        descriptor_handle = alert_signal_entity.descriptor.Handle
 
         for _activation_state, _presence, _location, _slot in product(list(pm_types.AlertActivation),
                                                                       list(pm_types.AlertSignalPresence),
@@ -847,15 +621,15 @@ class Test_Client_SomeDevice(unittest.TestCase):
 
     def test_set_patient_context_on_device(self):
         """Verify that a notification device->client updates the client mdib."""
-        clientMdib = EntityConsumerMdib(self.sdc_client)
-        clientMdib.init_mdib()
+        consumer_mdib = EntityConsumerMdib(self.sdc_client)
+        consumer_mdib.init_mdib()
 
-        patientDescriptorContainer = self.sdc_device.mdib.descriptions.NODETYPE.get_one(pm.PatientContextDescriptor)
+        patient_entity = self.sdc_device.mdib.entities.NODETYPE.get_one(pm.PatientContextDescriptor)
 
         coll = observableproperties.SingleValueCollector(self.sdc_client, 'episodic_context_report')
         with self.sdc_device.mdib.context_state_transaction() as mgr:
             tr_MdibVersion = self.sdc_device.mdib.mdib_version
-            st = mgr.mk_context_state(patientDescriptorContainer.Handle, set_associated=True)
+            st = mgr.mk_context_state(patient_entity.descriptor.Handle, set_associated=True)
             st.CoreData.Givenname = 'Max'
             st.CoreData.Middlename = ['Willy']
             st.CoreData.Birthname = 'Mustermann'
@@ -868,9 +642,7 @@ class Test_Client_SomeDevice(unittest.TestCase):
             st.CoreData.Race = pm_types.CodedValue('123', 'def')
             st.CoreData.DateOfBirth = datetime.datetime(2012, 3, 15, 13, 12, 11)
         coll.result(timeout=NOTIFICATION_TIMEOUT)
-        # patient_context_state_container = clientMdib.context_states.NODETYPE.get_one(
-        #     pm.PatientContextState, allow_none=True)
-        entity = clientMdib.entities.NODETYPE.get_one(pm.PatientContextDescriptor)
+        entity = consumer_mdib.entities.NODETYPE.get_one(pm.PatientContextDescriptor)
 
         self.assertIsNotNone(entity)
         self.assertEqual(len(entity.states), 1)
@@ -896,9 +668,7 @@ class Test_Client_SomeDevice(unittest.TestCase):
             st = mgr.get_context_state(patient_context_state_container.Handle)
             st.CoreData.Givenname = 'Moritz'
         coll.result(timeout=NOTIFICATION_TIMEOUT)
-        # patient_context_state_container = clientMdib.context_states.NODETYPE.get_one(
-        #     pm.PatientContextState, allow_none=True)
-        entity = clientMdib.entities.NODETYPE.get_one(pm.PatientContextDescriptor)
+        entity = consumer_mdib.entities.NODETYPE.get_one(pm.PatientContextDescriptor)
         patient_context_state_container = list(entity.states.values())[0]
         self.assertEqual(patient_context_state_container.CoreData.Givenname, 'Moritz')
         self.assertGreater(patient_context_state_container.BindingMdibVersion,
@@ -1005,11 +775,9 @@ class Test_Client_SomeDevice(unittest.TestCase):
         client_mdib = EntityConsumerMdib(self.sdc_client)
         client_mdib.init_mdib()
 
-        # descriptor_container = client_mdib.descriptions.handle.get_one(descriptor_handle)
         entity = client_mdib.entities.handle.get_one(descriptor_handle)
         initial_descriptor_version = entity.descriptor.DescriptorVersion
 
-        # state_container = client_mdib.states.descriptor_handle.get_one(descriptor_handle)
         self.assertEqual(entity.state.DescriptorVersion, initial_descriptor_version)
 
         # now update something and  wait for the next DescriptionModificationReport
@@ -1025,16 +793,13 @@ class Test_Client_SomeDevice(unittest.TestCase):
 
         # verify that devices mdib contains the updated descriptor_container
         # plus an updated state wit correct DescriptorVersion
-        descriptor_container = device_mdib.descriptions.handle.get_one(descriptor_handle)
-        state_container = device_mdib.states.descriptor_handle.get_one(descriptor_handle)
-        self.assertEqual(descriptor_container.DescriptorVersion, expected_descriptor_version)
-        self.assertEqual(descriptor_container.DeterminationPeriod, new_determination_period)
-        self.assertEqual(state_container.DescriptorVersion, expected_descriptor_version)
+        entity = device_mdib.entities.handle.get_one(descriptor_handle)
+        self.assertEqual(entity.descriptor.DescriptorVersion, expected_descriptor_version)
+        self.assertEqual(entity.descriptor.DeterminationPeriod, new_determination_period)
+        self.assertEqual(entity.state.DescriptorVersion, expected_descriptor_version)
 
         # verify that client got updates
-        # descriptor_container = client_mdib.descriptions.handle.get_one(descriptor_handle)
         entity = client_mdib.entities.handle.get_one(descriptor_handle)
-        # state_container = client_mdib.states.descriptor_handle.get_one(descriptor_handle)
         self.assertEqual(entity.descriptor.DescriptorVersion, expected_descriptor_version)
         self.assertEqual(entity.descriptor.DeterminationPeriod, new_determination_period)
         self.assertEqual(entity.state.DescriptorVersion, expected_descriptor_version)
@@ -1047,7 +812,7 @@ class Test_Client_SomeDevice(unittest.TestCase):
         cls = self.sdc_device.mdib.data_model.get_descriptor_container_class(node_name)
         with self.sdc_device.mdib.descriptor_transaction() as mgr:
             new_descriptor_container = cls(handle=new_handle,
-                                           parent_handle=descriptor_container.parent_handle,
+                                           parent_handle=entity.descriptor.parent_handle,
                                            )
             new_descriptor_container.Type = pm_types.CodedValue('12345')
             new_descriptor_container.Unit = pm_types.CodedValue('hector')
@@ -1055,7 +820,6 @@ class Test_Client_SomeDevice(unittest.TestCase):
             mgr.add_descriptor(new_descriptor_container)
         # long timeout, sometimes high load on jenkins makes these tests fail
         coll.result(timeout=NOTIFICATION_TIMEOUT)
-        # cl_descriptor_container = client_mdib.descriptions.handle.get_one(new_handle, allow_none=True)
         cl_entity = client_mdib.entities.handle.get_one(new_handle, allow_none=True)
         self.assertEqual(cl_entity.descriptor.Handle, new_handle)
 
@@ -1065,7 +829,6 @@ class Test_Client_SomeDevice(unittest.TestCase):
         with self.sdc_device.mdib.descriptor_transaction() as mgr:
             mgr.remove_descriptor(new_handle)
         coll.result(timeout=NOTIFICATION_TIMEOUT)
-        # cl_descriptor_container = client_mdib.descriptions.handle.get_one(new_handle, allow_none=True)
         cl_entity = client_mdib.entities.handle.get_one(new_handle, allow_none=True)
         self.assertIsNone(cl_entity)
 
@@ -1129,9 +892,9 @@ class Test_Client_SomeDevice(unittest.TestCase):
     def test_metadata_modification(self):
         with self.sdc_device.mdib.descriptor_transaction() as mgr:
             # set Metadata
-            mds_descriptors = self.sdc_device.mdib.descriptions.NODETYPE.get(pm.MdsDescriptor)
-            for tmp_mds_descriptor in mds_descriptors:
-                mds_descriptor = mgr.get_descriptor(tmp_mds_descriptor.Handle)
+            mds_entities = self.sdc_device.mdib.entities.NODETYPE.get(pm.MdsDescriptor)
+            for tmp_mds_entity in mds_entities:
+                mds_descriptor = mgr.get_descriptor(tmp_mds_entity.descriptor.Handle)
                 if mds_descriptor.MetaData is None:
                     cls = self.sdc_device.mdib.data_model.pm_types.MetaData
                     mds_descriptor.MetaData = cls()
@@ -1153,37 +916,25 @@ class Test_Client_SomeDevice(unittest.TestCase):
         time.sleep(0.1)
         client_mdib = EntityConsumerMdib(self.sdc_client)
         client_mdib.init_mdib()
-        dev_descriptor_count1 = len(self.sdc_device.mdib.descriptions.objects)
-        descr_handles = list(self.sdc_device.mdib.descriptions.handle.keys())
-        state_descriptor_handles = list(self.sdc_device.mdib.states.descriptor_handle.keys())
-        context_state_handles = list(self.sdc_device.mdib.context_states.handle.keys())
+        dev_descriptor_count1 = len(self.sdc_device.mdib.entities.objects)
+        descr_handles = list(self.sdc_device.mdib.entities.handle.keys())
         coll = observableproperties.SingleValueCollector(self.sdc_client, 'description_modification_report')
         with self.sdc_device.mdib.descriptor_transaction() as mgr:
-            mds_descriptors = self.sdc_device.mdib.descriptions.NODETYPE.get(pm.MdsDescriptor)
-            for descr in mds_descriptors:
-                mgr.remove_descriptor(descr.Handle)
+            mds_entities = self.sdc_device.mdib.entities.NODETYPE.get(pm.MdsDescriptor)
+            for entity in mds_entities:
+                mgr.remove_descriptor(entity.descriptor.Handle)
         coll.result(timeout=NOTIFICATION_TIMEOUT)
         # verify that all state versions were saved
-        descr_handles_lookup1 = copy.copy(self.sdc_device.mdib.descriptions.handle_version_lookup)
-        state_descriptor_handles_lookup1 = copy.copy(self.sdc_device.mdib.states.handle_version_lookup)
-        context_state_descriptor_handles_lookup1 = copy.copy(self.sdc_device.mdib.context_states.handle_version_lookup)
+        descr_handles_lookup1 = copy.copy(self.sdc_device.mdib.entities.handle_version_lookup_descr)
         for h in descr_handles:
             self.assertTrue(h in descr_handles_lookup1)
-        for h in state_descriptor_handles:
-            self.assertTrue(h in state_descriptor_handles_lookup1)
-        for h in context_state_handles:
-            self.assertTrue(h in context_state_descriptor_handles_lookup1)
 
         # verify that client mdib has same number of objects as device mdib
-        dev_descriptor_count2 = len(self.sdc_device.mdib.descriptions.objects)
-        dev_state_count2 = len(self.sdc_device.mdib.states.objects)
+        dev_descriptor_count2 = len(self.sdc_device.mdib.entities.objects)
         cl_descriptor_count2 = len(client_mdib.entities.objects)
-        # cl_state_count2 = len(client_mdib.states.objects)
-        cl_state_count2 = sum([len(e.state_handles) for e in client_mdib.entities.objects])
         self.assertTrue(dev_descriptor_count2 < dev_descriptor_count1)
         self.assertEqual(dev_descriptor_count2, 0)
         self.assertEqual(dev_descriptor_count2, cl_descriptor_count2)
-        self.assertEqual(dev_state_count2, cl_state_count2)
 
     def test_client_mdib_observables(self):
         client_mdib = EntityConsumerMdib(self.sdc_client)
@@ -1206,8 +957,9 @@ class Test_Client_SomeDevice(unittest.TestCase):
         self.assertTrue(descriptor_handle in data.keys())
         self.assertEqual(st.MetricValue.Value, data[descriptor_handle].MetricValue.Value)  # compare some data
 
+        # wait for the next EpisodicAlertReport
         coll = observableproperties.SingleValueCollector(client_mdib,
-                                                         'alert_by_handle')  # wait for the next EpisodicAlertReport
+                                                         'alert_by_handle')
         descriptor_handle = '0xD3C00108'  # an AlertConditionDescriptorHandle
         with self.sdc_device.mdib.alert_state_transaction(set_determination_time=False) as mgr:
             st = mgr.get_state(descriptor_handle)
@@ -1235,7 +987,7 @@ class Test_Client_SomeDevice(unittest.TestCase):
         self.assertGreater(len(data.keys()), 0)  # at least one real time sample array
 
     def test_is_connected_unfriendly(self):
-        """ Test device stop without sending subscription end messages"""
+        """Test device stop without sending subscription end messages."""
         self.log_watcher.setPaused(True)
         time.sleep(1)
         self.assertEqual(self.sdc_client.is_connected, True)
@@ -1250,7 +1002,7 @@ class Test_Client_SomeDevice(unittest.TestCase):
         self.sdc_client.stop_all(unsubscribe=False)  # without unsubscribe, is faster and would make no sense anyway
 
     def test_is_connected_friendly(self):
-        """ Test device stop with sending subscription end messages"""
+        """Test device stop with sending subscription end messages."""
         self.log_watcher.setPaused(True)
         time.sleep(1)
         self.assertEqual(self.sdc_client.is_connected, True)
@@ -1303,12 +1055,9 @@ class Test_Client_SomeDevice(unittest.TestCase):
 
         cl_mdib = EntityConsumerMdib(self.sdc_client)
         cl_mdib.init_mdib()
-        # for cl_descriptor in cl_mdib.descriptions.objects:
-        #     dev_descriptor = self.sdc_device.mdib.descriptions.handle.get_one(cl_descriptor.Handle)
-        #     self.assertEqual(dev_descriptor.Extension, cl_descriptor.Extension)
         for entity in cl_mdib.entities.objects:
-            dev_descriptor = self.sdc_device.mdib.descriptions.handle.get_one(entity.descriptor.Handle)
-            self.assertEqual(dev_descriptor.Extension, entity.descriptor.Extension)
+            entity = self.sdc_device.mdib.entities.handle.get_one(entity.descriptor.Handle)
+            self.assertEqual(entity.descriptor.Extension, entity.descriptor.Extension)
 
     def test_system_error_report(self):
         """Verify that a SystemErrorReport is successfully sent to consumer."""
@@ -1333,6 +1082,7 @@ class Test_Client_SomeDevice(unittest.TestCase):
 
 
 class Test_DeviceCommonHttpServer(unittest.TestCase):
+    """Run tests with providers and consumers that use a shared http server."""
 
     def setUp(self):
         basic_logging_setup()
@@ -1356,12 +1106,16 @@ class Test_DeviceCommonHttpServer(unittest.TestCase):
 
         self.sdc_device_1 = SomeDevice.from_mdib_file(self.wsd, 'device1', mdib_70041, log_prefix='<dev1> ')
         self.sdc_device_1.start_all(shared_http_server=self.httpserver)
-        self.sdc_device_1.set_location(location, self._loc_validators)
+        location_entities = self.sdc_device_1.mdib.entities.NODETYPE.get(pm.LocationContextDescriptor)
+        for loc in location_entities:
+            self.sdc_device_1.set_location(location, loc.descriptor.Handle, self._loc_validators)
         provide_realtime_data(self.sdc_device_1)
 
         self.sdc_device_2 = SomeDevice.from_mdib_file(self.wsd, 'device2', mdib_70041, log_prefix='<dev2> ')
         self.sdc_device_2.start_all(shared_http_server=self.httpserver)
-        self.sdc_device_2.set_location(location, self._loc_validators)
+        location_entities = self.sdc_device_2.mdib.entities.NODETYPE.get(pm.LocationContextDescriptor)
+        for loc in location_entities:
+            self.sdc_device_2.set_location(location, loc.descriptor.Handle, self._loc_validators)
         provide_realtime_data(self.sdc_device_2)
 
         time.sleep(0.5)  # allow full init of devices
@@ -1425,6 +1179,8 @@ class Test_DeviceCommonHttpServer(unittest.TestCase):
 
 
 class Test_Client_SomeDevice_chunked(unittest.TestCase):
+    """Run tests with a provider that sends chunked responses."""
+
     def setUp(self):
         basic_logging_setup()
         sys.stderr.write('\n############### start setUp {} ##############\n'.format(self._testMethodName))
@@ -1436,8 +1192,10 @@ class Test_Client_SomeDevice_chunked(unittest.TestCase):
 
         # in order to test correct handling of default namespaces, we make participant model the default namespace
         self.sdc_device.start_all()
+        location_entities = self.sdc_device.mdib.entities.NODETYPE.get(pm.LocationContextDescriptor)
         self._loc_validators = [pm_types.InstanceIdentifier('Validator', extension_string='System')]
-        self.sdc_device.set_location(utils.random_location(), self._loc_validators)
+        for loc in location_entities:
+            self.sdc_device.set_location(utils.random_location(), loc.descriptor.Handle, self._loc_validators)
         provide_realtime_data(self.sdc_device)
 
         time.sleep(0.5)  # allow full init of devices
@@ -1475,6 +1233,7 @@ class Test_Client_SomeDevice_chunked(unittest.TestCase):
 
 
 class TestClientSomeDeviceReferenceParametersDispatch(unittest.TestCase):
+    """Run tests with a consumer and provider that use reference parameters to identify subscriptions."""
     def setUp(self):
         basic_logging_setup()
         sys.stderr.write('\n############### start setUp {} ##############\n'.format(self._testMethodName))
@@ -1491,8 +1250,11 @@ class TestClientSomeDeviceReferenceParametersDispatch(unittest.TestCase):
                                                     chunk_size=512)
         # in order to test correct handling of default namespaces, we make participant model the default namespace
         self.sdc_device.start_all()
+        pm = self.sdc_device.mdib.data_model.pm_names
+        location_entities = self.sdc_device.mdib.entities.NODETYPE.get(pm.LocationContextDescriptor)
         self._loc_validators = [pm_types.InstanceIdentifier('Validator', extension_string='System')]
-        self.sdc_device.set_location(utils.random_location(), self._loc_validators)
+        for loc in location_entities:
+            self.sdc_device.set_location(utils.random_location(), loc.descriptor.Handle, self._loc_validators)
 
         time.sleep(0.5)  # allow full init of devices
 
@@ -1527,7 +1289,7 @@ class TestClientSomeDeviceReferenceParametersDispatch(unittest.TestCase):
         sys.stderr.write('############### tearDown {} done ##############\n'.format(self._testMethodName))
 
     def test_basic_connect(self):
-        # simply check that correct top node is returned
+        """Check that correct top node is returned."""
         get_service = self.sdc_client.client('Get')
         get_request_result = get_service.get_md_description()
         node = get_request_result.p_msg.msg_node
@@ -1552,7 +1314,7 @@ class TestClientSomeDeviceReferenceParametersDispatch(unittest.TestCase):
         self.assertEqual(get_request_result.msg_name, 'GetContextStatesResponse')
 
     def test_renew_get_status(self):
-        """ If renew and get_status work, then reference parameters based dispatching works. """
+        """If renew and get_status work, then reference parameters based dispatching works."""
         max_duration = self.sdc_device._max_subscription_duration
         for s in self.sdc_client._subscription_mgr.subscriptions.values():
             remaining_seconds = s.renew(max_duration + 100)  # very long
@@ -1567,6 +1329,8 @@ class TestClientSomeDeviceReferenceParametersDispatch(unittest.TestCase):
 
 
 class Test_Client_SomeDevice_sync(unittest.TestCase):
+    """Use a provider that uses default_sdc_provider_components_sync."""
+
     def setUp(self):
         basic_logging_setup()
         self.logger = get_logger_adapter('sdc.test')
@@ -1578,8 +1342,10 @@ class Test_Client_SomeDevice_sync(unittest.TestCase):
                                                     default_components=default_sdc_provider_components_sync,
                                                     chunk_size=512)
         self.sdc_device.start_all(periodic_reports_interval=1.0)
+        location_entities = self.sdc_device.mdib.entities.NODETYPE.get(pm.LocationContextDescriptor)
         self._loc_validators = [pm_types.InstanceIdentifier('Validator', extension_string='System')]
-        self.sdc_device.set_location(utils.random_location(), self._loc_validators)
+        for loc in location_entities:
+            self.sdc_device.set_location(utils.random_location(), loc.descriptor.Handle, self._loc_validators)
 
         time.sleep(0.5)  # allow full init of devices
 
@@ -1673,12 +1439,16 @@ class TestEncryptionCombinations(unittest.TestCase):
                                                     ssl_context_container=self.ssl_context_container)
 
         self.sdc_device.start_all()
+        location_entities = self.sdc_device.mdib.entities.NODETYPE.get(pm.LocationContextDescriptor)
         self._loc_validators = [pm_types.InstanceIdentifier('Validator', extension_string='System')]
-        self.sdc_device.set_location(utils.random_location(), self._loc_validators)
+        for loc in location_entities:
+            self.sdc_device.set_location(utils.random_location(), loc.descriptor.Handle, self._loc_validators)
 
         self.sdc_device_ssl.start_all()
+        location_entities = self.sdc_device_ssl.mdib.entities.NODETYPE.get(pm.LocationContextDescriptor)
         self._loc_validators = [pm_types.InstanceIdentifier('Validator', extension_string='System')]
-        self.sdc_device_ssl.set_location(utils.random_location(), self._loc_validators)
+        for loc in location_entities:
+            self.sdc_device.set_location(utils.random_location(), loc.descriptor.Handle, self._loc_validators)
 
         time.sleep(0.5)  # allow init of devices to complete
         self.logger.info('############### setUp done %s ##############', self._testMethodName)

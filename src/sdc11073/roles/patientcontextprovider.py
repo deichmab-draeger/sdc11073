@@ -25,13 +25,21 @@ class GenericPatientContextProvider(GenericContextProvider):
         self._patient_context_descriptor_container = None
         self._set_patient_context_operations = []
 
+    # def init_operations(self, sco: AbstractScoOperationsRegistry):
+    #     """Find the PatientContextDescriptor."""
+    #     super().init_operations(sco)
+    #     pm_names = self._mdib.data_model.pm_names
+    #     descriptor_containers = self._mdib.descriptions.NODETYPE.get(pm_names.PatientContextDescriptor)
+    #     if descriptor_containers is not None and len(descriptor_containers) == 1:
+    #         self._patient_context_descriptor_container = descriptor_containers[0]
+
     def init_operations(self, sco: AbstractScoOperationsRegistry):
         """Find the PatientContextDescriptor."""
         super().init_operations(sco)
         pm_names = self._mdib.data_model.pm_names
-        descriptor_containers = self._mdib.descriptions.NODETYPE.get(pm_names.PatientContextDescriptor)
-        if descriptor_containers is not None and len(descriptor_containers) == 1:
-            self._patient_context_descriptor_container = descriptor_containers[0]
+        entities = self._mdib.entities.NODETYPE.get(pm_names.PatientContextDescriptor)
+        if entities is not None and len(entities) == 1:
+            self._patient_context_descriptor_container = entities[0].descriptor
 
     def make_operation_instance(self,
                                 operation_descriptor_container: AbstractOperationDescriptorProtocol,

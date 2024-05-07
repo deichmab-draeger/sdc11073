@@ -1,0 +1,720 @@
+from __future__ import annotations
+
+import time
+import uuid
+from typing import TYPE_CHECKING, cast
+
+from sdc11073.exceptions import ApiUsageError
+from sdc11073.mdib.statecontainers import AbstractMultiStateProtocol
+from sdc11073.mdib.transactionsprotocol import (
+    AnyTransactionManagerProtocol,
+    TransactionItem,
+    TransactionResultProtocol,
+    TransactionType,
+)
+from .mdibbase import Entity, MultiStateEntity
+if TYPE_CHECKING:
+    from sdc11073.loghelper import LoggerAdapter
+
+    from sdc11073.mdib.descriptorcontainers import AbstractDescriptorProtocol
+    from .providermdib import EntityProviderMdib
+    from sdc11073.mdib.statecontainers import AbstractStateProtocol
+
+
+class _TransactionBase:
+    def __init__(self,
+                 device_mdib_container: EntityProviderMdib,
+                 logger: LoggerAdapter):
+        self._mdib = device_mdib_container
+        self._logger = logger
+        self.descriptor_updates: dict[str, TransactionItem] = {}
+        self.metric_state_updates: dict[str, TransactionItem] = {}
+        self.alert_state_updates: dict[str, TransactionItem] = {}
+        self.component_state_updates: dict[str, TransactionItem] = {}
+        self.context_state_updates: dict[str, TransactionItem] = {}
+        self.operational_state_updates: dict[str, TransactionItem] = {}
+        self.rt_sample_state_updates: dict[str, TransactionItem] = {}
+        self._error = False
+
+    def _handle_state_updates(self, state_updates_dict: dict) -> list[TransactionItem]:
+        """Update mdib table and return a list of states to be sent in notifications.
+
+        This method handles new and updated states. Deleting states is not possible.
+        """
+        updates_list = []
+        for transaction_item in state_updates_dict.values():
+
+            if transaction_item.new is None:
+                # delete state
+                raise ValueError('Deleting states is not possible!')
+            entity = self._mdib.entities.handle.get_one(transaction_item.new.DescriptorHandle)
+
+            if transaction_item.old is None:
+                # new state
+                entity.add_state(transaction_item.new)
+            else:
+                # update state
+                old_transaction_item = transaction_item.old.mk_copy(copy_node=False)
+                if entity.is_multi_state:
+                    entity.states[transaction_item.old.Handle].update_from_other_container(transaction_item.new)
+                else:
+                    entity.state.update_from_other_container(transaction_item.new)
+            self._mdib.entities.update_object(entity)
+            updates_list.append(transaction_item.new.mk_copy(copy_node=False))
+        return updates_list
+
+    def get_state_transaction_item(self, handle: str) -> TransactionItem | None:
+        """If transaction has a state with given handle, return the transaction-item, otherwise None.
+
+        :param handle: the Handle of a context state or the DescriptorHandle in all other cases
+        """
+        if not handle:
+            raise ValueError('No handle for state specified')
+        for lookup in (self.metric_state_updates,
+                       self.alert_state_updates,
+                       self.component_state_updates,
+                       self.context_state_updates,
+                       self.operational_state_updates,
+                       self.rt_sample_state_updates):
+            if handle in lookup:
+                return lookup[handle]
+        return None
+
+    @property
+    def error(self) -> bool:
+        return self._error
+
+
+class DescriptorTransaction(_TransactionBase):
+    """A Transaction that allows to insert / update / delete Descriptors and to modify states related to them."""
+
+    def __init__(self,
+                 device_mdib_container: EntityProviderMdib,
+                 logger: LoggerAdapter):
+        super().__init__(device_mdib_container, logger)
+
+    def actual_descriptor(self, descriptor_handle: str) -> AbstractDescriptorProtocol:
+        """Return the actual descriptor in open transaction or from mdib.
+
+        This method does not add the descriptor to the transaction!
+        The descriptor can already be part of the transaction, and e.g. in pre_commit handlers of role providers
+        it can be necessary to have access to it.
+        """
+        if not descriptor_handle:
+            raise ValueError('No handle for descriptor specified')
+        tr_container = self.descriptor_updates.get(descriptor_handle)
+        if tr_container is not None:
+            if tr_container.new is None:  # descriptor is deleted in this transaction!
+                raise ValueError(f'The descriptor {descriptor_handle} is going to be deleted')
+            return tr_container.new
+        return self._mdib.entities.handle.get_one(descriptor_handle).descriptor
+
+    def add_descriptor(self,
+                       descriptor_container: AbstractDescriptorProtocol,
+                       adjust_descriptor_version: bool = True,
+                       state_container: AbstractStateProtocol | None = None):
+        """Add a new descriptor to mdib."""
+        descriptor_handle = descriptor_container.Handle
+        if descriptor_handle in self.descriptor_updates:
+            raise ValueError(f'Descriptor {descriptor_handle} already in updated set!')
+        if descriptor_handle in self._mdib.entities.handle:
+            raise ValueError(f'Cannot create descriptor {descriptor_handle}, it already exists in mdib!')
+        if adjust_descriptor_version:
+            self._mdib.entities.set_descriptor_version(descriptor_container)
+        if descriptor_container.source_mds is None:
+            self._mdib.xtra.set_source_mds(Entity(descriptor_container))
+        self.descriptor_updates[descriptor_handle] = TransactionItem(None, descriptor_container)
+        if state_container is not None:
+            if state_container.DescriptorHandle != descriptor_handle:
+                raise ValueError(
+                    f'State {state_container.DescriptorHandle} does not match descriptor {descriptor_handle}!')
+            self.add_state(state_container)
+
+    def remove_descriptor(self, descriptor_handle: str):
+        """Remove existing descriptor from mdib."""
+        if not descriptor_handle:
+            raise ValueError('No handle for descriptor specified')
+        if descriptor_handle in self.descriptor_updates:
+            raise ValueError(f'Descriptor {descriptor_handle} already in updated set!')
+        orig_descriptor_container = self._mdib.entities.handle.get_one(descriptor_handle).descriptor
+        self.descriptor_updates[descriptor_handle] = TransactionItem(orig_descriptor_container, None)
+
+    def get_descriptor(self, descriptor_handle: str) -> AbstractDescriptorProtocol:
+        """Get a descriptor from mdib."""
+        if not descriptor_handle:
+            raise ValueError('No handle for descriptor specified')
+        if descriptor_handle in self.descriptor_updates:
+            raise ValueError(f'Descriptor {descriptor_handle} already in updated set!')
+        orig_descriptor_container = self._mdib.entities.handle.get_one(descriptor_handle).descriptor
+        descriptor_container = orig_descriptor_container.mk_copy()
+        descriptor_container.increment_descriptor_version()
+        self.descriptor_updates[descriptor_handle] = TransactionItem(orig_descriptor_container, descriptor_container)
+        return descriptor_container
+
+    def get_state(self, descriptor_handle: str) -> AbstractStateProtocol:
+        """Read a state from mdib and add it to the transaction.
+
+        This method only allows to get a state if the corresponding descriptor is already part of the transaction.
+        if not, it raises an ApiUsageError.
+        """
+        if not descriptor_handle:
+            raise ValueError('No handle for state specified')
+        if descriptor_handle not in self.descriptor_updates:
+            raise ApiUsageError('Transaction does not contain the corresponding descriptor!')
+        descriptor = self.descriptor_updates[descriptor_handle].new
+        if descriptor.is_context_descriptor:
+            # prevent this for simplicity reasons
+            raise ApiUsageError('Transaction does not support extra handling of context states!')
+
+        updates_dict = self._get_states_update(descriptor)
+        if descriptor_handle in updates_dict:
+            raise ValueError(f'State {descriptor_handle} already in updated set!')
+
+        mdib_state = self._mdib.entities.descriptor_handle.get_one(descriptor_handle, allow_none=False).state
+        copied_state = mdib_state.mk_copy()
+        copied_state.increment_state_version()
+        updates_dict[descriptor_handle] = TransactionItem(mdib_state, copied_state)
+        return copied_state
+
+    def add_state(self, state_container: AbstractStateProtocol, adjust_state_version: bool = True):
+        """Add a new state to mdib.
+
+        This method only allows to add a state if the corresponding descriptor is already part of the transaction.
+        if not, it raises an ApiUsageError.
+        """
+        if state_container.DescriptorHandle not in self.descriptor_updates:
+            raise ApiUsageError('Transaction has no descriptor for this state!')
+        updates_dict = self._get_states_update(state_container)
+
+        if state_container.is_context_state:
+            if state_container.Handle is None:
+                state_container.Handle = uuid.uuid4().hex
+            key = state_container.Handle
+        else:
+            key = state_container.DescriptorHandle
+
+        if key in updates_dict:
+            raise ValueError(f'State {key} already in updated set!')
+
+        # set reference to descriptor
+        state_container.descriptor_container = self.descriptor_updates[state_container.DescriptorHandle].new
+        state_container.DescriptorVersion = state_container.descriptor_container.DescriptorVersion
+        if adjust_state_version:
+            self._mdib.entities.set_state_version(state_container)
+        updates_dict[key] = TransactionItem(None, state_container)
+
+    def process_transaction(self, set_determination_time: bool) -> TransactionResultProtocol:  # noqa: ARG002
+        """Process transaction and create a TransactionResult.
+
+        The parameter set_determination_time is only present in order to implement the interface correctly.
+        Determination time is not set, because descriptors have no modification time.
+        """
+        proc = TransactionResult()
+        if self.descriptor_updates:
+            self._mdib.mdib_version += 1
+            # need to know all to be deleted and to be created descriptors
+            to_be_deleted_handles = [tr_item.old.Handle for tr_item in self.descriptor_updates.values()
+                                     if tr_item.new is None and tr_item.old is not None]
+            to_be_created_handles = [tr_item.new.Handle for tr_item in self.descriptor_updates.values()
+                                     if tr_item.old is None and tr_item.new is not None]
+            # Remark 1:
+            # handling only updated states here: If a descriptor is created, it can be assumed that the
+            # application also creates the state in a transaction.
+            # The state will then be transported via that notification report.
+            # Maybe this needs to be reworked, but at the time of this writing it seems fine.
+            #
+            # Remark 2:
+            # DescriptionModificationReport also contains the states that are related to the descriptors.
+            # => if there is one, update its DescriptorVersion and add it to list of states that shall be sent
+            # (Assuming that context descriptors (patient, location) are never changed,
+            #  additional check for states in self.context_states is not needed.
+            #  If this assumption is wrong, that functionality must be added!)
+
+            for tr_item in self.descriptor_updates.values():
+                orig_descriptor, new_descriptor = tr_item.old, tr_item.new
+
+                if orig_descriptor is None:
+                    # this is a create operation
+                    updates_dict = self._get_states_update(new_descriptor)
+                    corresponding_state_items = [item for item in updates_dict.values()
+                                                 if item.new is not None
+                                                 and item.new.DescriptorHandle == new_descriptor.Handle]
+                    self._logger.debug(  # noqa: PLE1205
+                        'transaction_manager: new descriptor Handle={}, DescriptorVersion={}',
+                        new_descriptor.Handle, new_descriptor.DescriptorVersion)
+                    proc.descr_created.append(new_descriptor.mk_copy())
+                    # self._mdib.descriptions.add_object_no_lock(new_descriptor)
+                    if new_descriptor.is_context_descriptor:
+                        entity = MultiStateEntity(new_descriptor)
+                        for item in corresponding_state_items:
+                            entity.add_state(item.new)
+                        self._mdib.entities.add_object_no_lock(entity)
+                    else:
+                        if len(corresponding_state_items) == 1:
+                            entity = Entity(new_descriptor, corresponding_state_items[0].new)
+                        else:
+                            entity = Entity(new_descriptor)
+                        self._mdib.entities.add_object_no_lock(entity)
+                    # increment DescriptorVersion if a child descriptor is added or deleted.
+                    if new_descriptor.parent_handle is not None \
+                            and new_descriptor.parent_handle not in to_be_created_handles:
+                        # only update parent if it is not also created in this transaction
+                        self._increment_parent_descriptor_version(proc, new_descriptor)
+                elif new_descriptor is None:
+                    # this is a delete operation
+                    self._logger.debug(  # noqa: PLE1205
+                        'transaction_manager: rm descriptor Handle={}, DescriptorVersion={}',
+                        orig_descriptor.Handle, orig_descriptor.DescriptorVersion)
+                    root_entity = self._mdib.entities.handle.get_one(orig_descriptor.Handle)
+                    all_entities = self._mdib.get_all_entities_in_subtree(root_entity)
+                    self._mdib.entities.remove_objects_no_lock(all_entities)
+                    proc.descr_deleted.extend([e.descriptor.mk_copy() for e in all_entities])
+                    # increment DescriptorVersion of parent if a child descriptor is added or deleted.
+                    if orig_descriptor.parent_handle is not None \
+                            and orig_descriptor.parent_handle not in to_be_deleted_handles:
+                        # only update parent if it is not also deleted in this transaction
+                        self._increment_parent_descriptor_version(proc, orig_descriptor)
+                else:
+                    # this is an update operation
+                    updates_dict = self._get_states_update(new_descriptor)
+                    corresponding_state_items = [item for item in updates_dict.values()
+                                                 if item.new is not None
+                                                 and item.new.DescriptorHandle == new_descriptor.Handle]
+
+                    proc.descr_updated.append(new_descriptor)
+                    self._logger.debug(  # noqa: PLE1205
+                        'transaction_manager: update descriptor Handle={}, DescriptorVersion={}',
+                        new_descriptor.Handle, new_descriptor.DescriptorVersion)
+                    entity = self._mdib.entities.handle.get_one(orig_descriptor.Handle)
+                    entity.descriptor.update_from_other_container(new_descriptor)
+                    if entity.is_multi_state:
+                        for item in corresponding_state_items:
+                            entity.states[item.new.Handle].update_from_other_container(item.new)
+
+                    self._update_corresponding_state(entity)
+
+            for updates_dict, dest_list in ((self.alert_state_updates, proc.alert_updates),
+                                            (self.metric_state_updates, proc.metric_updates),
+                                            (self.context_state_updates, proc.ctxt_updates),
+                                            (self.component_state_updates, proc.comp_updates),
+                                            (self.operational_state_updates, proc.op_updates),
+                                            (self.rt_sample_state_updates, proc.rt_updates),
+                                            ):
+                updates = self._handle_state_updates(updates_dict)
+                dest_list.extend(updates)
+        return proc
+
+    def _update_corresponding_state(self, entity: Entity | MultiStateEntity):
+        """Update versioning of states.
+
+        - set DescriptorVersion to current version of descriptor.
+        - increment state version
+        - add state to updates dictionary (so that state is sent in notification).
+        """
+        updates_dict = self._get_states_update(entity.descriptor)
+
+        if entity.is_multi_state:
+            for context_state in entity.states.values():
+                # check if state is already present in this transaction
+                tr_item = updates_dict.get(context_state.Handle)
+                if tr_item is not None:
+                    # the state has also been updated directly in transaction.
+                    # update descriptor version
+                    old_state, new_state = tr_item
+                else:
+                    old_state = context_state
+                    new_state = old_state.mk_copy()
+                    updates_dict[context_state.Handle] = TransactionItem(old_state, new_state)
+                new_state.descriptor_container = entity.descriptor
+                new_state.increment_state_version()
+                new_state.update_descriptor_version()
+        else:
+            # check if state is already present in this transaction
+            tr_item = updates_dict.get(entity.descriptor.Handle)
+            if tr_item is not None:
+                # the state has also been updated directly in transaction.
+                # update descriptor version
+                if tr_item.new is None:
+                    raise ValueError(
+                        f'State deleted? That should not be possible! handle = {entity.descriptor.Handle}')
+                tr_item.new.update_descriptor_version()
+            elif entity.state is not None:
+                new_state = entity.state.mk_copy()
+                new_state.descriptor_container = entity.descriptor
+                new_state.DescriptorVersion = entity.descriptor.DescriptorVersion
+                new_state.increment_state_version()
+                updates_dict[entity.descriptor.Handle] = TransactionItem(entity.state, new_state)
+
+    def _increment_parent_descriptor_version(self, proc: TransactionResult,
+                                             descriptor_container: AbstractDescriptorProtocol):
+        parent_entity = self._mdib.entities.handle.get_one(
+            descriptor_container.parent_handle, allow_none=True)
+        if parent_entity is not None:
+            parent_entity.descriptor.increment_descriptor_version()
+            proc.descr_updated.append(parent_entity.descriptor.mk_copy())
+            self._update_corresponding_state(parent_entity)
+
+    def _get_states_update(self, container: AbstractStateProtocol | AbstractDescriptorProtocol) -> dict:
+        if getattr(container, 'is_realtime_sample_array_metric_state', False) \
+                or getattr(container, 'is_realtime_sample_array_metric_descriptor', False):
+            return self.rt_sample_state_updates
+        if getattr(container, 'is_metric_state', False) or getattr(container, 'is_metric_descriptor', False):
+            return self.metric_state_updates
+        if getattr(container, 'is_alert_state', False) or getattr(container, 'is_alert_descriptor', False):
+            return self.alert_state_updates
+        if getattr(container, 'is_component_state', False) or getattr(container, 'is_component_descriptor', False):
+            return self.component_state_updates
+        if getattr(container, 'is_operational_state', False) or getattr(container, 'is_operational_descriptor', False):
+            return self.operational_state_updates
+        if getattr(container, 'is_context_state', False) or getattr(container, 'is_context_descriptor', False):
+            return self.context_state_updates
+        raise NotImplementedError(f'Unhandled case {container}')
+
+
+class StateTransactionBase(_TransactionBase):
+    """Base Class for all transactions that modify states."""
+
+    def __init__(self,
+                 device_mdib_container: EntityProviderMdib,
+                 logger: LoggerAdapter):
+        super().__init__(device_mdib_container, logger)
+        self._state_updates = {}  # will be set to proper value in derived classes
+
+    def has_state(self, descriptor_handle: str) -> bool:
+        """Check if transaction has a state with given handle."""
+        return descriptor_handle in self._state_updates
+
+    def unget_state(self, state_container: AbstractStateProtocol):
+        """Forget a state that was provided before by a get_state or add_state call."""
+        if state_container.DescriptorHandle in self._state_updates:
+            del self._state_updates[state_container.DescriptorHandle]
+
+    def get_state(self, descriptor_handle: str) -> AbstractStateProtocol:
+        """Read a state from mdib and add it to the transaction.
+
+        If the type of the state does not match the transaction type, an ApiUsageError is thrown.
+        """
+        if not descriptor_handle:
+            raise ValueError('No handle for state specified')
+        if descriptor_handle in self._state_updates:
+            raise ValueError(f'State {descriptor_handle} already in updated set!')
+
+        entity = self._mdib.entities.handle.get_one(descriptor_handle, allow_none=False)
+        if not self._is_correct_state_type(entity.state):
+            raise ApiUsageError(f'Wrong data type in transaction! {self.__class__.__name__}, {entity.state}')
+
+        copied_state = entity.state.mk_copy()
+        copied_state.increment_state_version()
+        self._state_updates[descriptor_handle] = TransactionItem(entity.state, copied_state)
+        return copied_state
+
+    def get_entity(self, descriptor_handle: str) -> Entity:
+        """Read a state from mdib and add it to the transaction.
+
+        If the type of the state does not match the transaction type, an ApiUsageError is thrown.
+        """
+        if not descriptor_handle:
+            raise ValueError('No handle for state specified')
+        if descriptor_handle in self._state_updates:
+            raise ValueError(f'State {descriptor_handle} already in updated set!')
+
+        entity = self._mdib.entities.handle.get_one(descriptor_handle, allow_none=False)
+        if not self._is_correct_state_type(entity.state):
+            raise ApiUsageError(f'Wrong data type in transaction! {self.__class__.__name__}, {entity.state}')
+
+        copied_state = entity.state.mk_copy()
+        copied_state.increment_state_version()
+
+        self._state_updates[descriptor_handle] = TransactionItem(entity.state, copied_state)
+        return Entity(entity.descriptor.mk_copy(), copied_state)
+
+    def actual_descriptor(self, descriptor_handle: str) -> AbstractDescriptorProtocol:
+        """Look descriptor in mdib, state transaction cannot have descriptor changes."""
+        return self._mdib.entities.handle.get_one(descriptor_handle).descriptor
+
+    @staticmethod
+    def _is_correct_state_type(state: AbstractStateProtocol) -> bool:  # noqa: ARG004
+        return False
+
+
+class AlertStateTransaction(StateTransactionBase):
+    """A Transaction for alert states."""
+
+    def __init__(self,
+                 device_mdib_container: EntityProviderMdib,
+                 logger: LoggerAdapter):
+        super().__init__(device_mdib_container, logger)
+        self._state_updates = self.alert_state_updates
+
+    def process_transaction(self, set_determination_time: bool) -> TransactionResultProtocol:
+        """Process transaction and create a TransactionResult."""
+        if set_determination_time:
+            for tr_item in self._state_updates.values():
+                new_state = tr_item.new
+                old_state = tr_item.old
+                if new_state is None or not hasattr(new_state, 'Presence'):
+                    continue
+                if old_state is None:
+                    if new_state.Presence:
+                        new_state.DeterminationTime = time.time()
+                elif new_state.is_alert_condition and new_state.Presence != old_state.Presence:
+                    new_state.DeterminationTime = time.time()
+        proc = TransactionResult()
+        if self._state_updates:
+            self._mdib.mdib_version += 1
+            updates = self._handle_state_updates(self._state_updates)
+            proc.alert_updates.extend(updates)
+        return proc
+
+    @staticmethod
+    def _is_correct_state_type(state: AbstractStateProtocol) -> bool:
+        return state.is_alert_state
+
+
+class MetricStateTransaction(StateTransactionBase):
+    """A Transaction for metric states (except real time samples)."""
+
+    def __init__(self,
+                 device_mdib_container: EntityProviderMdib,
+                 logger: LoggerAdapter):
+        super().__init__(device_mdib_container, logger)
+        self._state_updates = self.metric_state_updates
+
+    def process_transaction(self, set_determination_time: bool) -> TransactionResultProtocol:
+        """Process transaction and create a TransactionResult."""
+        if set_determination_time:
+            for tr_item in self._state_updates.values():
+                if tr_item.new is not None and tr_item.new.MetricValue is not None:
+                    tr_item.new.MetricValue.DeterminationTime = time.time()
+        proc = TransactionResult()
+        if self._state_updates:
+            self._mdib.mdib_version += 1
+            updates = self._handle_state_updates(self._state_updates)
+            proc.metric_updates.extend(updates)
+        return proc
+
+    @staticmethod
+    def _is_correct_state_type(state: AbstractStateProtocol) -> bool:
+        return state.is_metric_state and not state.is_realtime_sample_array_metric_state
+
+
+class ComponentStateTransaction(StateTransactionBase):
+    """A Transaction for component states."""
+
+    def __init__(self,
+                 device_mdib_container: EntityProviderMdib,
+                 logger: LoggerAdapter):
+        super().__init__(device_mdib_container, logger)
+        self._state_updates = self.component_state_updates
+
+    def process_transaction(self, set_determination_time: bool) -> TransactionResultProtocol:  # noqa: ARG002
+        """Process transaction and create a TransactionResult."""
+        proc = TransactionResult()
+        if self._state_updates:
+            self._mdib.mdib_version += 1
+            updates = self._handle_state_updates(self._state_updates)
+            proc.comp_updates.extend(updates)
+        return proc
+
+    @staticmethod
+    def _is_correct_state_type(state: AbstractStateProtocol) -> bool:
+        return state.is_component_state
+
+
+class RtStateTransaction(StateTransactionBase):
+    """A Transaction for real time sample states."""
+
+    def __init__(self,
+                 device_mdib_container: EntityProviderMdib,
+                 logger: LoggerAdapter):
+        super().__init__(device_mdib_container, logger)
+        self._state_updates = self.rt_sample_state_updates
+
+    def process_transaction(self, set_determination_time: bool) -> TransactionResultProtocol:  # noqa: ARG002
+        """Process transaction and create a TransactionResult."""
+        proc = TransactionResult()
+        if self._state_updates:
+            self._mdib.mdib_version += 1
+            updates = self._handle_state_updates(self._state_updates)
+            proc.rt_updates.extend(updates)
+        return proc
+
+    @staticmethod
+    def _is_correct_state_type(state: AbstractStateProtocol) -> bool:
+        return state.is_realtime_sample_array_metric_state
+
+
+class OperationalStateTransaction(StateTransactionBase):
+    """A Transaction for operational states."""
+
+    def __init__(self,
+                 device_mdib_container: EntityProviderMdib,
+                 logger: LoggerAdapter):
+        super().__init__(device_mdib_container, logger)
+        self._state_updates = self.operational_state_updates
+
+    def process_transaction(self, set_determination_time: bool) -> TransactionResultProtocol:  # noqa: ARG002
+        """Process transaction and create a TransactionResult."""
+        proc = TransactionResult()
+        if self._state_updates:
+            self._mdib.mdib_version += 1
+            updates = self._handle_state_updates(self._state_updates)
+            proc.op_updates.extend(updates)
+        return proc
+
+    @staticmethod
+    def _is_correct_state_type(state: AbstractStateProtocol) -> bool:
+        return state.is_operational_state
+
+
+class ContextStateTransaction(_TransactionBase):
+    """A Transaction for context states."""
+
+    def __init__(self,
+                 device_mdib_container: EntityProviderMdib,
+                 logger: LoggerAdapter):
+        super().__init__(device_mdib_container, logger)
+        self._state_updates = self.context_state_updates
+
+    def get_context_state(self, context_state_handle: str) -> AbstractMultiStateProtocol:
+        """Read a ContextState from mdib with given state handle."""
+        if not context_state_handle:
+            raise ValueError('No handle for context state specified')
+        if context_state_handle in self._state_updates:
+            raise ValueError(f'Context State {context_state_handle} already in updated set!')
+
+        entity = self._mdib.entities.state_handle.get_one(context_state_handle, allow_none=False)
+        mdib_state = entity.states[context_state_handle]
+        copied_state = mdib_state.mk_copy()
+        copied_state.increment_state_version()
+        self._state_updates[context_state_handle] = TransactionItem(mdib_state, copied_state)
+        return copied_state
+
+    def mk_context_state(self, descriptor_handle: str,
+                         context_state_handle: str | None = None,
+                         adjust_state_version: bool = True,
+                         set_associated: bool = False) -> AbstractMultiStateProtocol:
+        """Create a new ContextStateContainer and add it to transaction.
+
+        If context_state_handle is None, a unique handle is generated.
+        """
+        if not descriptor_handle:
+            raise ValueError('No descriptor handle for context state specified')
+        if context_state_handle in self._state_updates:
+            raise ValueError(f'Context State {context_state_handle} already in updated set!')
+        entity = self._mdib.entities.handle.get_one(descriptor_handle, allow_none=False)
+        if not entity.descriptor.is_context_descriptor:
+            raise ValueError(f'Descriptor {descriptor_handle} is not a context descriptor!')
+
+        if context_state_handle is not None:
+            old_state_container = entity.states.get(context_state_handle)
+            if old_state_container is not None:
+                raise ValueError(f'ContextState with handle={context_state_handle} already exists')
+
+        new_state_container = self._mdib.data_model.mk_state_container(entity.descriptor)
+        new_state_container.Handle = context_state_handle or uuid.uuid4().hex
+        if set_associated:
+            # bind to mdib version AFTER this transaction
+            new_state_container.BindingMdibVersion = self._mdib.mdib_version + 1
+            new_state_container.BindingStartTime = time.time()
+            new_state_container.ContextAssociation = \
+                self._mdib.data_model.pm_types.ContextAssociation.ASSOCIATED
+        if context_state_handle is not None and adjust_state_version:
+            self._mdib.entities.set_state_version(new_state_container)
+
+        self._state_updates[new_state_container.Handle] = TransactionItem(None, new_state_container)
+        return cast(AbstractMultiStateProtocol, new_state_container)
+
+    def add_state(self, state_container: AbstractMultiStateProtocol, adjust_state_version: bool = True):
+        """Add a new state to mdib."""
+        if not state_container.is_context_state:
+            # prevent this for simplicity reasons
+            raise ApiUsageError('Transaction only handles context states!')
+
+        if adjust_state_version:
+            self._mdib.entities.set_state_version(state_container)
+
+        entity = self._mdib.entities.handle.get_one(state_container.DescriptorHandle)
+
+        state_container.descriptor_container = entity.descriptor
+        state_container.DescriptorVersion = entity.descriptor.DescriptorVersion
+
+        self._state_updates[state_container.Handle] = TransactionItem(None, state_container)
+
+    def get_entity(self, descriptor_handle: str) -> MultiStateEntity:
+        """Read a state from mdib and add it to the transaction.
+
+        If the type of the state does not match the transaction type, an ApiUsageError is thrown.
+        """
+        if not descriptor_handle:
+            raise ValueError('No handle for state specified')
+        if descriptor_handle in self._state_updates:
+            raise ValueError(f'State {descriptor_handle} already in updated set!')
+
+        entity = self._mdib.entities.handle.get_one(descriptor_handle, allow_none=False)
+        if not self._is_correct_state_type(entity.state):
+            raise ApiUsageError(f'Wrong data type in transaction! {self.__class__.__name__}, {entity.state}')
+
+        copied_state = entity.state.mk_copy()
+        copied_state.increment_state_version()
+
+        self._state_updates[descriptor_handle] = TransactionItem(entity.state, copied_state)
+        return MultiStateEntity(entity.descriptor.mk_copy(), copied_state)
+
+    def process_transaction(self, set_determination_time: bool) -> TransactionResultProtocol:  # noqa: ARG002
+        """Process transaction and create a TransactionResult."""
+        proc = TransactionResult()
+        if self._state_updates:
+            self._mdib.mdib_version += 1
+            updates = self._handle_state_updates(self._state_updates)
+            proc.ctxt_updates.extend(updates)
+        return proc
+
+    @staticmethod
+    def _is_correct_state_type(state: AbstractStateProtocol) -> bool:
+        return state.is_context_state
+
+
+class TransactionResult:
+    """The transaction result.
+
+    Data is used to create notifications.
+    """
+
+    def __init__(self):
+        # states and descriptors that were modified are stored here:
+        self.descr_updated = []
+        self.descr_created = []
+        self.descr_deleted = []
+        self.metric_updates = []
+        self.alert_updates = []
+        self.comp_updates = []
+        self.ctxt_updates = []
+        self.op_updates = []
+        self.rt_updates = []
+
+    @property
+    def has_descriptor_updates(self) -> bool:
+        """Return True if at least one descriptor is in result."""
+        return len(self.descr_updated) > 0 or len(self.descr_created) > 0 or len(self.descr_deleted) > 0
+
+    def all_states(self) -> list[AbstractStateProtocol]:
+        """Return all states in this transaction."""
+        return self.metric_updates + self.alert_updates + self.comp_updates + self.ctxt_updates \
+               + self.op_updates + self.rt_updates
+
+
+_transaction_type_lookup = {TransactionType.descriptor: DescriptorTransaction,
+                            TransactionType.alert: AlertStateTransaction,
+                            TransactionType.metric: MetricStateTransaction,
+                            TransactionType.operational: OperationalStateTransaction,
+                            TransactionType.context: ContextStateTransaction,
+                            TransactionType.component: ComponentStateTransaction,
+                            TransactionType.rt_sample: RtStateTransaction}
+
+
+def mk_transaction(provider_mdib: EntityProviderMdib,
+                   transaction_type: TransactionType,
+                   logger: LoggerAdapter) -> AnyTransactionManagerProtocol:
+    """Create a transaction according to transaction_type."""
+    return _transaction_type_lookup[transaction_type](provider_mdib, logger)
