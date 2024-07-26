@@ -578,8 +578,10 @@ class SdcConsumer:
         self._soap_clients = {}
         self._stop_event_sink()
 
-    def restart(self):
+    def restart(self, new_device_location : str | None = None):
         """forget existing data and restart from the beginning."""
+        if new_device_location is not None:
+            self._device_location = new_device_location
         mdib = self._mdib  # keep existing mdib connection
         self.stop_all()  # with unsubscribe
         # start with the same parameters as initially

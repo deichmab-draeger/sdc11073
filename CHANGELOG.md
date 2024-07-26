@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - new method ContextStateTransaction.disaccociate_all
 - additional schemata for validation can be declared in SdcProviderComponents and SdcConsumerComponents
 - new method Consumer.restart
+- new class ReconnectAgent manages automatic reconnection of consumers
 
 ### Fixed
 
@@ -31,6 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - incorrect BindingMdibVersion and UnbindingMdibVersion [#168](https://github.com/Draegerwerk/sdc11073/issues/168)
 - ensure_location_context_descriptor and ensure_patient_context_descriptor also work for multiple system contexts in mdib.
 - provider mdib observables are updated [#365](https://github.com/Draegerwerk/sdc11073/issues/365)
+- provider start_all after stop_all() works now.
 
 ### Changed
 
@@ -40,7 +42,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Before the proposed state was always associated. 
   Check added in SetContextState that max. one proposed state per descriptor is associated.
 - refactored ClientMdib.reload_all and processing of notifications
-- 
+- added parameter 'new_device_location' to Consumer.restart
+
 ## [2.0.1] - 2024-02-21
 
 ### Fixed

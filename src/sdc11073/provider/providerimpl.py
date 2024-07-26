@@ -230,6 +230,7 @@ class SdcProvider:
                       self._max_subscription_duration,
                       log_prefix=self._log_prefix,
                       )
+            mgr.start_all()
             self._subscriptions_managers[name] = mgr
 
         services_factory = self._components.services_factory
@@ -450,7 +451,7 @@ class SdcProvider:
             self._logger.error('Cannot start device, could not bind HTTP server to a port.')
             raise RuntimeError('Cannot start device, could not bind HTTP server to a port.')
 
-        self.base_urls = []  # e.g https://192.168.1.5:8888/8c26f673-fdbf-4380-b5ad-9e2454a65b6b; list has one member for each used ip address
+        self.base_urls: list[SplitResult] = []  # e.g https://192.168.1.5:8888/8c26f673-fdbf-4380-b5ad-9e2454a65b6b; list has one member for each used ip address
         for addr in host_ips:
             self.base_urls.append(
                 SplitResult(self._urlschema, f'{addr}:{port}', self.path_prefix, query=None, fragment=None))

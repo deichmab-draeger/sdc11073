@@ -266,7 +266,17 @@ class ActionBasedSubscription(SubscriptionBase):
 
 class SubscriptionManagerProtocol(Protocol):
 
-    def set_base_urls(self, base_urls):
+    def __init__(self,
+                 sdc_definitions: BaseDefinitions,
+                 msg_factory: MessageFactory,
+                 soap_client_pool: SoapClientPool,
+                 max_subscription_duration: [float, None] = None,
+                 log_prefix: str = None,
+                 ):
+        """Instantiate."""
+        ...
+
+    def set_base_urls(self, base_urls: list[SplitResult]):
         """A subscription manager must know its own address, it must be sent to subscribers in subscribe responses."""
         ...
 
@@ -284,6 +294,10 @@ class SubscriptionManagerProtocol(Protocol):
 
     def on_renew_request(self, request_data: RequestData) -> CreatedMessage:
         """Handler for a renew request."""
+        ...
+
+    def start_all(self):
+        """Start."""
         ...
 
     def stop_all(self, send_subscription_end: bool):
@@ -318,9 +332,8 @@ class SubscriptionsManagerBase:
         self.base_urls = None
         self._housekeeping_thread = Thread(target=self._do_housekeeping, name="housekeeping", daemon=True)
         self._run_housekeeping_thread = False
-        self._housekeeping_thread.start()
 
-    def set_base_urls(self, base_urls):
+    def set_base_urls(self, base_urls: list[SplitResult]):
         """Set base url.
 
         A subscription manager must know its own address, it must be sent to subscribers in subscribe responses.
@@ -402,6 +415,10 @@ class SubscriptionsManagerBase:
             renew_response.Expires = subscription.remaining_seconds
             response = self._msg_factory.mk_reply_soap_message(request_data, renew_response)
         return response
+
+    def start_all(self):
+        self._run_housekeeping_thread = False
+        self._housekeeping_thread.start()
 
     def stop_all(self, send_subscription_end: bool):
         self._logger.info('stop_all called')
